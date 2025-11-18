@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.env
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data / artifacts
+data/
+*.csv
+*.parquet
+*.jsonl
+*.tar.gz
+
+# Credentials
+*.env
+.env.*
+.env.kol
+
+# IDE
+.idea/
+.vscode/

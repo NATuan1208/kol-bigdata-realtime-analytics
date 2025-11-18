@@ -1,0 +1,8 @@
+# ============================================================================
+# Custom MLflow with PostgreSQL support
+# ============================================================================
+FROM ghcr.io/mlflow/mlflow:v2.9.2
+
+# Install psycopg2 for PostgreSQL backend
+RUN pip install --no-cache-dir psycopg2-binary
+
