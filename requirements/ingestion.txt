@@ -1,0 +1,22 @@
+# KOL Analytics - Ingestion Requirements
+# ========================================
+# Install: pip install -r requirements/ingestion.txt
+
+# MinIO client
+minio>=7.2.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# HuggingFace datasets (PHASE 1B: large-scale real datasets)
+datasets>=2.14.0
+
+# Web scraping (for Wikipedia/Backlinko)
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+html5lib>=1.1
+
+# Utilities
+python-dotenv>=1.0.0

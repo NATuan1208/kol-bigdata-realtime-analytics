@@ -1,0 +1,110 @@
+# ============================================================================
+# Python Dependencies for KOL Platform - FULL STACK
+# ============================================================================
+# Tải TẤT CẢ packages ngay từ đầu (không chia phase)
+# Dựa trên kiến trúc model thực tế: Trust (XGB+IForest+PhoBERT) + Success (Prophet+LightGBM)
+# ============================================================================
+
+# ============================================================================
+# CORE DATA PROCESSING
+# ============================================================================
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.11.0
+pyarrow>=14.0.0              # Parquet/Iceberg support
+
+# ============================================================================
+# BIG DATA PROCESSING
+# ============================================================================
+pyspark==3.5.3               # ~320MB - ETL & feature engineering
+
+# ============================================================================
+# TRUST SCORE MODELS (Stacking Ensemble)
+# ============================================================================
+# Base Model 1: XGBoost (Tabular)
+xgboost>=2.0.0               # ~30MB
+
+# Base Model 2: Isolation Forest (Anomaly)
+scikit-learn>=1.3.0          # ~50MB - includes IsolationForest
+pyod>=1.1.0                  # ~30MB - additional anomaly algorithms
+
+# Base Model 3: PhoBERT (Fine-tuned NLP)
+torch>=2.1.0                 # ~2.5GB - Required for transformers
+transformers>=4.35.0         # ~500MB - Hugging Face models
+sentencepiece>=0.1.99        # ~20MB - Tokenizer for PhoBERT
+
+# Meta Model: Calibrated Logistic Regression
+# (Already in scikit-learn)
+
+# ============================================================================
+# SUCCESS FORECAST MODELS (Blending Ensemble)
+# ============================================================================
+# Base Model 1: Prophet (Time-Series Baseline)
+prophet>=1.1.5               # ~80MB
+
+# Base Model 2: LightGBM (Time-Series Features)
+lightgbm>=4.1.0              # ~20MB
+
+# Meta Model: Ridge/ElasticNet
+# (Already in scikit-learn)
+
+# ============================================================================
+# TIME SERIES UTILITIES
+# ============================================================================
+statsmodels>=0.14.0          # ~50MB - ARIMA, seasonal decomposition
+
+# ============================================================================
+# MLOPS & MODEL MANAGEMENT
+# ============================================================================
+mlflow>=2.9.0                # ~50MB - Model tracking & registry
+onnx>=1.15.0                 # ~30MB - Model export for serving
+onnxruntime>=1.16.0          # ~20MB - Fast inference
+
+# ============================================================================
+# DATA STORAGE & CONNECTORS
+# ============================================================================
+boto3>=1.29.0                # ~30MB - MinIO/S3 client
+psycopg2-binary>=2.9.9       # ~10MB - PostgreSQL
+trino>=0.327.0               # ~20MB - Query engine
+kafka-python>=2.0.2          # ~10MB - Streaming (Phase 2+)
+cassandra-driver>=3.28.0     # ~30MB - Metrics DB (Phase 2+)
+redis>=5.0.0                 # ~5MB - Cache (Phase 2+)
+
+# ============================================================================
+# DATA COLLECTION (Phase 1)
+# ============================================================================
+requests>=2.31.0             # ~5MB - HTTP client
+beautifulsoup4>=4.12.0       # ~3MB - HTML parsing
+selenium>=4.15.0             # ~10MB - Browser automation
+httpx>=0.25.0                # ~5MB - Async HTTP
+
+# Social Media APIs
+tweepy>=4.14.0               # ~5MB - Twitter/X API
+# facebook-sdk>=3.1.0        # Facebook API (optional)
+# instaloader>=4.10.0        # Instagram (optional)
+
+# ============================================================================
+# UTILITIES & CONFIGURATION
+# ============================================================================
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+pyyaml>=6.0.1
+joblib>=1.3.0
+click>=8.1.0
+tqdm>=4.66.0
+loguru>=0.7.0
+
+# ============================================================================
+# MONITORING & OBSERVABILITY
+# ============================================================================
+prometheus-client>=0.19.0    # Metrics export
+
+# ============================================================================
+# TESTING & QUALITY (optional)
+# ============================================================================
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.12.0
+# ruff>=0.1.0
+
