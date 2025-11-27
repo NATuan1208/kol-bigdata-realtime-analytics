@@ -23,6 +23,7 @@ data/
 *.env
 .env.*
 .env.kol
+.env.local
 
 # IDE
 .idea/
