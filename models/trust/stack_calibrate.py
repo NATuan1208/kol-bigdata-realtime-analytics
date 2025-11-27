@@ -50,35 +50,75 @@ MODEL_DIR = PROJECT_ROOT / "models" / "artifacts" / "trust"
 ENSEMBLE_NAME = "ensemble_trust_score"
 
 
-def load_base_models() -> dict:
-    """Load all trained base models."""
+def load_base_models(use_optuna: bool = True) -> dict:
+    """Load all trained base models.
+    
+    Args:
+        use_optuna: If True, prefer Optuna-tuned models over baseline.
+                    Falls back to baseline if Optuna models not found.
+    """
     print("\n" + "="*60)
     print("📦 LOADING BASE MODELS")
     print("="*60)
     
+    if use_optuna:
+        print("   🔍 Preferring Optuna-tuned models...")
+    
     models = {}
     
-    # XGBoost
-    try:
-        xgb_path = MODEL_DIR / "xgb_trust_classifier_latest.joblib"
-        xgb_model = joblib.load(xgb_path)
-        with open(str(xgb_path).replace(".joblib", "_metadata.json"), "r") as f:
-            xgb_meta = json.load(f)
-        models["xgboost"] = (xgb_model, xgb_meta)
-        print(f"   ✅ XGBoost: ROC-AUC={xgb_meta['metrics']['roc_auc']:.4f}")
-    except FileNotFoundError:
-        print(f"   ⚠️ XGBoost model not found")
+    # XGBoost - Try Optuna first, then baseline
+    xgb_loaded = False
+    if use_optuna:
+        try:
+            xgb_path = MODEL_DIR / "xgb_optuna_model.pkl"
+            xgb_model = joblib.load(xgb_path)
+            # Load metrics from reports
+            reports_dir = PROJECT_ROOT / "models" / "reports"
+            with open(reports_dir / "xgb_optuna_metrics.json", "r") as f:
+                xgb_meta = {"metrics": json.load(f)}
+            models["xgboost"] = (xgb_model, xgb_meta)
+            print(f"   ✅ XGBoost (Optuna): ROC-AUC={xgb_meta['metrics']['roc_auc']:.4f}")
+            xgb_loaded = True
+        except FileNotFoundError:
+            print(f"   ⚠️ XGBoost Optuna model not found, trying baseline...")
     
-    # LightGBM
-    try:
-        lgbm_path = MODEL_DIR / "lgbm_trust_classifier_latest.joblib"
-        lgbm_model = joblib.load(lgbm_path)
-        with open(str(lgbm_path).replace(".joblib", "_metadata.json"), "r") as f:
-            lgbm_meta = json.load(f)
-        models["lightgbm"] = (lgbm_model, lgbm_meta)
-        print(f"   ✅ LightGBM: ROC-AUC={lgbm_meta['metrics']['roc_auc']:.4f}")
-    except FileNotFoundError:
-        print(f"   ⚠️ LightGBM model not found")
+    if not xgb_loaded:
+        try:
+            xgb_path = MODEL_DIR / "xgb_trust_classifier_latest.joblib"
+            xgb_model = joblib.load(xgb_path)
+            with open(str(xgb_path).replace(".joblib", "_metadata.json"), "r") as f:
+                xgb_meta = json.load(f)
+            models["xgboost"] = (xgb_model, xgb_meta)
+            print(f"   ✅ XGBoost (Baseline): ROC-AUC={xgb_meta['metrics']['roc_auc']:.4f}")
+        except FileNotFoundError:
+            print(f"   ⚠️ XGBoost model not found")
+    
+    # LightGBM - Try Optuna first, then baseline
+    lgbm_loaded = False
+    if use_optuna:
+        try:
+            lgbm_path = MODEL_DIR / "lgbm_optuna_model.pkl"
+            lgbm_model = joblib.load(lgbm_path)
+            # Load metrics from reports
+            reports_dir = PROJECT_ROOT / "models" / "reports"
+            with open(reports_dir / "lgbm_optuna_metrics.json", "r") as f:
+                lgbm_meta = {"metrics": json.load(f)}
+            models["lightgbm"] = (lgbm_model, lgbm_meta)
+            print(f"   ✅ LightGBM (Optuna): ROC-AUC={lgbm_meta['metrics']['roc_auc']:.4f}")
+            lgbm_loaded = True
+        except FileNotFoundError:
+            print(f"   ⚠️ LightGBM Optuna model not found, trying baseline...")
+    
+    if not lgbm_loaded:
+        try:
+            lgbm_path = MODEL_DIR / "lgbm_trust_classifier_latest.joblib"
+            lgbm_model = joblib.load(lgbm_path)
+            with open(str(lgbm_path).replace(".joblib", "_metadata.json"), "r") as f:
+                lgbm_meta = json.load(f)
+            models["lightgbm"] = (lgbm_model, lgbm_meta)
+            print(f"   ✅ LightGBM (Baseline): ROC-AUC={lgbm_meta['metrics']['roc_auc']:.4f}")
+        except FileNotFoundError:
+            print(f"   ⚠️ LightGBM model not found")
     
     # Isolation Forest
     try:
@@ -99,6 +139,8 @@ def load_base_models() -> dict:
 
 def get_base_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
     """Get probability predictions from all base models."""
+    import lightgbm as lgb
+    
     predictions = {}
     
     if "xgboost" in models:
@@ -107,7 +149,13 @@ def get_base_predictions(models: dict, X: pd.DataFrame) -> pd.DataFrame:
     
     if "lightgbm" in models:
         lgbm_model, _ = models["lightgbm"]
-        predictions["lgbm_prob"] = lgbm_model.predict_proba(X)[:, 1]
+        # Handle both sklearn API and native Booster
+        if hasattr(lgbm_model, 'predict_proba'):
+            # sklearn LGBMClassifier
+            predictions["lgbm_prob"] = lgbm_model.predict_proba(X)[:, 1]
+        elif isinstance(lgbm_model, lgb.Booster):
+            # Native LightGBM Booster (from Optuna training)
+            predictions["lgbm_prob"] = lgbm_model.predict(X)
     
     if "iforest" in models:
         iforest_model, iforest_scaler, iforest_meta = models["iforest"]
@@ -234,6 +282,8 @@ def main():
     parser = argparse.ArgumentParser(description="Train Ensemble Stacking")
     parser.add_argument("--no-calibrate", action="store_true")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument("--no-optuna", action="store_true", 
+                       help="Use baseline models instead of Optuna-tuned")
     args = parser.parse_args()
     
     print("="*70)
@@ -241,7 +291,7 @@ def main():
     print("="*70)
     
     X_train, X_test, y_train, y_test = load_training_data(test_size=0.2)
-    base_models = load_base_models()
+    base_models = load_base_models(use_optuna=not args.no_optuna)
     
     train_preds = get_base_predictions(base_models, X_train)
     test_preds = get_base_predictions(base_models, X_test)
