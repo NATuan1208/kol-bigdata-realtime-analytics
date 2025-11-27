@@ -1,23 +1,23 @@
 """
-KOL TRUST SCORE - XGBOOST CLASSIFIER
-=====================================
+KOL TRUST SCORE - LIGHTGBM CLASSIFIER
+======================================
 
-Train XGBoost model để detect KOL không đáng tin.
-- Hyperparameter tuning với Optuna
-- Handle class imbalance với scale_pos_weight
-- Early stopping để tránh overfit
+Train LightGBM model để detect KOL không đáng tin.
+- Faster training than XGBoost
+- Native categorical feature support
+- Built-in early stopping
 - Feature importance analysis
 
 Usage:
 ------
 # Train với default params
-python models/trust/train_xgb.py
+python models/trust/train_lgbm.py
 
 # Train với Optuna tuning
-python models/trust/train_xgb.py --tune
+python models/trust/train_lgbm.py --tune
 
-# Train với custom params
-python models/trust/train_xgb.py --n-estimators 200 --max-depth 8
+# Train với custom params  
+python models/trust/train_lgbm.py --n-estimators 200 --num-leaves 64
 """
 
 import os
@@ -39,7 +39,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 
-import xgboost as xgb
+import lightgbm as lgb
 
 warnings.filterwarnings('ignore')
 
@@ -50,7 +50,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from models.trust.data_loader import (
     load_training_data,
     get_feature_names,
-    get_scale_pos_weight
+    get_scale_pos_weight,
+    get_class_weights
 )
 
 
@@ -58,22 +59,23 @@ from models.trust.data_loader import (
 # CONFIGURATION
 # =============================================================================
 MODEL_DIR = PROJECT_ROOT / "models" / "artifacts" / "trust"
-MODEL_NAME = "xgb_trust_classifier"
+MODEL_NAME = "lgbm_trust_classifier"
 
-# Default XGBoost params (tuned for this dataset)
+# Default LightGBM params
 DEFAULT_PARAMS = {
     "n_estimators": 150,
-    "max_depth": 6,
+    "num_leaves": 31,
+    "max_depth": -1,  # No limit
     "learning_rate": 0.1,
     "subsample": 0.8,
     "colsample_bytree": 0.8,
-    "min_child_weight": 3,
-    "gamma": 0.1,
+    "min_child_samples": 20,
     "reg_alpha": 0.1,
-    "reg_lambda": 1.0,
+    "reg_lambda": 0.1,
     "random_state": 42,
     "n_jobs": -1,
-    "verbosity": 1,
+    "verbose": -1,
+    "force_col_wise": True,  # Avoid warning
 }
 
 
@@ -81,30 +83,30 @@ DEFAULT_PARAMS = {
 # MODEL TRAINING
 # =============================================================================
 
-def train_xgboost(
+def train_lightgbm(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     X_val: pd.DataFrame = None,
     y_val: pd.Series = None,
     params: dict = None,
     early_stopping_rounds: int = 20
-) -> xgb.XGBClassifier:
+) -> lgb.LGBMClassifier:
     """
-    Train XGBoost classifier.
+    Train LightGBM classifier.
     
     Args:
         X_train: Training features
         y_train: Training labels
         X_val: Validation features (optional, for early stopping)
         y_val: Validation labels
-        params: XGBoost parameters
+        params: LightGBM parameters
         early_stopping_rounds: Stop if no improvement
         
     Returns:
-        Trained XGBClassifier
+        Trained LGBMClassifier
     """
     print("\n" + "="*60)
-    print("🌲 TRAINING XGBOOST CLASSIFIER")
+    print("🌿 TRAINING LIGHTGBM CLASSIFIER")
     print("="*60)
     
     # Merge with default params
@@ -112,26 +114,31 @@ def train_xgboost(
     if params:
         model_params.update(params)
     
-    # Calculate scale_pos_weight for imbalanced data
-    scale_pos_weight = get_scale_pos_weight(y_train)
-    model_params["scale_pos_weight"] = scale_pos_weight
+    # Handle class imbalance
+    class_weights = get_class_weights(y_train)
+    model_params["class_weight"] = class_weights
     
     print(f"\n📋 Model Parameters:")
     for k, v in model_params.items():
-        print(f"   {k}: {v}")
+        if k != "class_weight":  # Don't print full dict
+            print(f"   {k}: {v}")
+    print(f"   class_weight: {class_weights}")
     
     # Create model
-    model = xgb.XGBClassifier(**model_params)
+    model = lgb.LGBMClassifier(**model_params)
     
     # Fit with early stopping if validation set provided
     fit_params = {}
     if X_val is not None and y_val is not None:
         fit_params["eval_set"] = [(X_val, y_val)]
-        fit_params["verbose"] = False
+        fit_params["eval_metric"] = "logloss"
         
-        # XGBoost 2.0+ uses early_stopping_rounds parameter directly
-        # Note: callbacks API changed in XGBoost 3.x
-        model.set_params(early_stopping_rounds=early_stopping_rounds)
+        # LightGBM callback for early stopping
+        callbacks = [
+            lgb.early_stopping(stopping_rounds=early_stopping_rounds, verbose=False),
+            lgb.log_evaluation(period=0)  # Suppress iteration logs
+        ]
+        fit_params["callbacks"] = callbacks
         
         print(f"\n🎯 Training with early stopping (patience={early_stopping_rounds})...")
     else:
@@ -141,8 +148,8 @@ def train_xgboost(
     model.fit(X_train, y_train, **fit_params)
     
     # Best iteration info
-    if hasattr(model, 'best_iteration'):
-        print(f"   Best iteration: {model.best_iteration}")
+    if hasattr(model, 'best_iteration_') and model.best_iteration_ > 0:
+        print(f"   Best iteration: {model.best_iteration_}")
     
     return model
 
@@ -155,15 +162,6 @@ def tune_with_optuna(
 ) -> dict:
     """
     Hyperparameter tuning với Optuna.
-    
-    Args:
-        X_train: Training features
-        y_train: Training labels
-        n_trials: Number of Optuna trials
-        cv_folds: Cross-validation folds
-        
-    Returns:
-        Best parameters dict
     """
     try:
         import optuna
@@ -178,26 +176,27 @@ def tune_with_optuna(
     print(f"   Trials: {n_trials}")
     print(f"   CV Folds: {cv_folds}")
     
-    scale_pos_weight = get_scale_pos_weight(y_train)
+    class_weights = get_class_weights(y_train)
     
     def objective(trial):
         params = {
             "n_estimators": trial.suggest_int("n_estimators", 50, 300),
-            "max_depth": trial.suggest_int("max_depth", 3, 10),
+            "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
             "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
-            "gamma": trial.suggest_float("gamma", 0, 1),
+            "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
             "reg_alpha": trial.suggest_float("reg_alpha", 0, 1),
-            "reg_lambda": trial.suggest_float("reg_lambda", 0, 2),
-            "scale_pos_weight": scale_pos_weight,
+            "reg_lambda": trial.suggest_float("reg_lambda", 0, 1),
+            "class_weight": class_weights,
             "random_state": 42,
             "n_jobs": -1,
-            "verbosity": 0,
+            "verbose": -1,
+            "force_col_wise": True,
         }
         
-        model = xgb.XGBClassifier(**params)
+        model = lgb.LGBMClassifier(**params)
         
         # Cross-validation
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
@@ -219,7 +218,7 @@ def tune_with_optuna(
     # Return best params merged with defaults
     best_params = DEFAULT_PARAMS.copy()
     best_params.update(study.best_trial.params)
-    best_params["scale_pos_weight"] = scale_pos_weight
+    best_params["class_weight"] = class_weights
     
     return best_params
 
@@ -229,16 +228,13 @@ def tune_with_optuna(
 # =============================================================================
 
 def evaluate_model(
-    model: xgb.XGBClassifier,
+    model: lgb.LGBMClassifier,
     X_test: pd.DataFrame,
     y_test: pd.Series,
     threshold: float = 0.5
 ) -> dict:
     """
     Evaluate model performance.
-    
-    Returns:
-        Dict with all metrics
     """
     print("\n" + "="*60)
     print("📊 MODEL EVALUATION")
@@ -278,28 +274,36 @@ def evaluate_model(
 
 
 def get_feature_importance(
-    model: xgb.XGBClassifier,
+    model: lgb.LGBMClassifier,
     feature_names: list[str],
+    importance_type: str = "gain",
     top_k: int = 15
 ) -> pd.DataFrame:
     """
     Get feature importance from trained model.
+    
+    Args:
+        importance_type: "gain" or "split"
     """
     print("\n" + "="*60)
-    print("🎯 FEATURE IMPORTANCE (Top {})".format(top_k))
+    print(f"🎯 FEATURE IMPORTANCE - {importance_type.upper()} (Top {top_k})")
     print("="*60)
     
-    importance = model.feature_importances_
+    importance = model.booster_.feature_importance(importance_type=importance_type)
     
     df_importance = pd.DataFrame({
         "feature": feature_names,
         "importance": importance
     }).sort_values("importance", ascending=False)
     
+    # Normalize for display
+    max_imp = df_importance["importance"].max()
+    
     # Print top features
-    for i, row in df_importance.head(top_k).iterrows():
-        bar = "█" * int(row["importance"] * 50)
-        print(f"   {row['feature']:<35} {row['importance']:.4f} {bar}")
+    for _, row in df_importance.head(top_k).iterrows():
+        bar_len = int((row["importance"] / max_imp) * 30) if max_imp > 0 else 0
+        bar = "█" * bar_len
+        print(f"   {row['feature']:<35} {row['importance']:>8.1f} {bar}")
     
     return df_importance
 
@@ -309,7 +313,7 @@ def get_feature_importance(
 # =============================================================================
 
 def save_model(
-    model: xgb.XGBClassifier,
+    model: lgb.LGBMClassifier,
     metrics: dict,
     params: dict,
     feature_names: list[str]
@@ -326,12 +330,23 @@ def save_model(
     joblib.dump(model, model_path)
     print(f"\n💾 Model saved: {model_path}")
     
-    # Save metadata
+    # Also save native LightGBM format
+    lgb_path = MODEL_DIR / f"{MODEL_NAME}_{timestamp}.lgb"
+    model.booster_.save_model(str(lgb_path))
+    print(f"💾 Native LGB saved: {lgb_path}")
+    
+    # Save metadata (convert class_weight dict keys to strings)
+    params_serializable = params.copy()
+    if "class_weight" in params_serializable:
+        params_serializable["class_weight"] = {
+            str(k): v for k, v in params_serializable["class_weight"].items()
+        }
+    
     metadata = {
         "model_name": MODEL_NAME,
         "timestamp": timestamp,
         "metrics": metrics,
-        "params": params,
+        "params": params_serializable,
         "feature_names": feature_names,
         "n_features": len(feature_names),
     }
@@ -354,7 +369,7 @@ def save_model(
     return model_path, metadata_path
 
 
-def load_model(model_path: str = None) -> tuple[xgb.XGBClassifier, dict]:
+def load_model(model_path: str = None) -> tuple[lgb.LGBMClassifier, dict]:
     """
     Load saved model and metadata.
     """
@@ -376,17 +391,17 @@ def load_model(model_path: str = None) -> tuple[xgb.XGBClassifier, dict]:
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Train XGBoost Trust Classifier")
+    parser = argparse.ArgumentParser(description="Train LightGBM Trust Classifier")
     parser.add_argument("--tune", action="store_true", help="Run Optuna hyperparameter tuning")
     parser.add_argument("--n-trials", type=int, default=50, help="Optuna trials")
     parser.add_argument("--n-estimators", type=int, default=None, help="Number of trees")
-    parser.add_argument("--max-depth", type=int, default=None, help="Max tree depth")
+    parser.add_argument("--num-leaves", type=int, default=None, help="Number of leaves")
     parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate")
     parser.add_argument("--no-save", action="store_true", help="Don't save model")
     args = parser.parse_args()
     
     print("="*70)
-    print("🌲 XGBOOST TRUST SCORE CLASSIFIER")
+    print("🌿 LIGHTGBM TRUST SCORE CLASSIFIER")
     print("="*70)
     print(f"   Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
@@ -410,15 +425,16 @@ def main():
         params = tune_with_optuna(X_train, y_train, n_trials=args.n_trials)
     else:
         params = DEFAULT_PARAMS.copy()
+        params["class_weight"] = get_class_weights(y_train)
         if args.n_estimators:
             params["n_estimators"] = args.n_estimators
-        if args.max_depth:
-            params["max_depth"] = args.max_depth
+        if args.num_leaves:
+            params["num_leaves"] = args.num_leaves
         if args.learning_rate:
             params["learning_rate"] = args.learning_rate
     
     # Train
-    model = train_xgboost(
+    model = train_lightgbm(
         X_train_split, y_train_split,
         X_val, y_val,
         params=params,
@@ -428,15 +444,16 @@ def main():
     # Evaluate
     metrics = evaluate_model(model, X_test, y_test)
     
-    # Feature importance
-    importance_df = get_feature_importance(model, feature_names)
+    # Feature importance (both gain and split)
+    importance_gain = get_feature_importance(model, feature_names, importance_type="gain")
+    importance_split = get_feature_importance(model, feature_names, importance_type="split")
     
     # Save
     if not args.no_save:
         save_model(model, metrics, params, feature_names)
     
     print("\n" + "="*70)
-    print("✅ XGBOOST TRAINING COMPLETE!")
+    print("✅ LIGHTGBM TRAINING COMPLETE!")
     print("="*70)
     
     return model, metrics
