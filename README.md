@@ -2,6 +2,8 @@
 
 A real-time **KOL Trustworthiness & Success Analytics** platform built on modern Data Engineering & MLOps stack.
 
+> ⚠️ **Bài toán**: Đánh giá **độ tin cậy KOL** (Trust Score) để hỗ trợ brands quyết định hợp tác marketing - **KHÔNG phải** bài toán Bot Detection. Dataset bot detection được sử dụng làm **PROXY** vì bot patterns ~ untrustworthy KOL patterns (~80% overlap).
+
 ## 📊 Data Pipeline Status
 
 | Layer | Tables | Records | Status |

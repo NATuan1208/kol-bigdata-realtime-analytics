@@ -1,0 +1,30 @@
+{
+  "model_name": "iforest_trust_anomaly",
+  "timestamp": "20251127_021145",
+  "metrics": {
+    "accuracy": 0.43963675213675213,
+    "precision": 0.15181115181115182,
+    "recall": 0.1501006036217304,
+    "f1_score": 0.150951031970862,
+    "roc_auc": 0.4012315749383368
+  },
+  "params": {
+    "n_estimators": 200,
+    "max_samples": "auto",
+    "contamination": 0.33,
+    "max_features": 1.0,
+    "bootstrap": false,
+    "n_jobs": -1,
+    "random_state": 42,
+    "verbose": 0
+  },
+  "feature_names": [
+    "followers_per_day",
+    "fake_follower_indicator",
+    "has_profile_image",
+    "has_bio",
+    "has_url",
+    "verified"
+  ],
+  "n_features": 6
+}

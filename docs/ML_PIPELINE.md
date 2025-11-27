@@ -20,9 +20,32 @@
 
 ## 🎯 Tổng Quan Bài Toán
 
+### ⚠️ LƯU Ý QUAN TRỌNG
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              ĐÂY KHÔNG PHẢI BÀI TOÁN BOT DETECTION!                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ❌ SAI:  "Phát hiện tài khoản bot"                                     │
+│  ✅ ĐÚNG: "Đánh giá độ tin cậy KOL để hợp tác marketing"                │
+│                                                                         │
+│  • Dataset bot detection được RE-PURPOSE cho bài toán Trust Score       │
+│  • Bot patterns ≈ Untrustworthy KOL patterns (~80% overlap)             │
+│  • Model học nhận diện BEHAVIORAL PATTERNS, không phải detect bot       │
+│  • Output là Trust Score (0-100%), không phải is_bot (Yes/No)           │
+│                                                                         │
+│  💼 BUSINESS VALUE:                                                     │
+│  • Giúp brands đánh giá KOL trước khi hợp tác                           │
+│  • Tiết kiệm marketing budget (tránh fake influencers)                  │
+│  • Giảm rủi ro campaign marketing                                       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Business Problem
 
-Detect **KOL không đáng tin (Untrustworthy KOLs)** - những người có hành vi:
+Đánh giá **độ tin cậy của KOL (Key Opinion Leader)** để giúp brands/agencies quyết định hợp tác marketing. Model nhận diện những KOL có dấu hiệu không đáng tin:
 - 🤖 Sử dụng **fake followers** (mua followers ảo)
 - 📈 **Suspicious growth patterns** (tăng followers bất thường)
 - 📉 **Low engagement với high followers** (nhiều followers nhưng ít tương tác)
@@ -38,7 +61,7 @@ Detect **KOL không đáng tin (Untrustworthy KOLs)** - những người có hà
 │   Input:  29 engineered features từ KOL profile & activity              │
 │                                                                         │
 │   Output: Trust Score (0-100)                                           │
-│           ├── 80-100: Highly Trustworthy ✅                             │
+│           ├── 80-100: Highly Trustworthy ✅                            │
 │           ├── 60-79:  Moderately Trustworthy                            │
 │           ├── 40-59:  Needs Review ⚠️                                   │
 │           └── 0-39:   Likely Untrustworthy ❌                           │
@@ -89,7 +112,7 @@ Detect **KOL không đáng tin (Untrustworthy KOLs)** - những người có hà
 │        │                   │                  │                      │             │
 │        ▼                   ▼                  ▼                      ▼             │
 │   37,438 records     29 features      3 base models         Calibrated Score      │
-│                                                                                     │
+│                                                                                    │
 │  ┌──────────────────────────────────────────────────────────────────────────────┐  │
 │  │                         TRAINING INFRASTRUCTURE                              │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │  │
@@ -575,7 +598,67 @@ search_space = {
 | **XGBoost ROC-AUC** | 0.9403 | **0.9418** | +0.15% |
 | **XGBoost Accuracy** | 87.42% | **87.62%** | +0.20% |
 
-> **Kết luận:** Optuna cải thiện performance một cách nhất quán. Dù improvement nhỏ (~0.2%), nhưng với bài toán classification này, mỗi 0.1% đều có ý nghĩa cho việc detect untrustworthy KOLs.
+> **Kết luận:** Optuna cải thiện performance một cách nhất quán cho từng model riêng lẻ.
+
+### 🔬 Ensemble Diversity Analysis (Quan trọng!)
+
+Một quan sát thú vị khi áp dụng Optuna-tuned models vào Ensemble:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    ENSEMBLE DIVERSITY PARADOX                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  INDIVIDUAL MODELS (Optuna tuning):                                     │
+│  ├── XGBoost:  0.9403 → 0.9418 (+0.15%) ✅ BETTER                       │
+│  └── LightGBM: 0.9406 → 0.9423 (+0.17%) ✅ BETTER                       │
+│                                                                         │
+│  ENSEMBLE STACKING:                                                     │
+│  ├── Baseline Ensemble:      ROC-AUC = 0.9403, Accuracy = 88.21%        │
+│  └── Optuna-tuned Ensemble:  ROC-AUC = 0.9400, Accuracy = 88.10%        │
+│                               (-0.03%)           (-0.11%)               │
+│                                                                         │
+│  🤔 WHY? DIVERSITY LOSS!                                                │
+│  ─────────────────────────                                              │
+│  Khi Optuna tối ưu cả 2 models theo cùng objective (ROC-AUC),           │
+│  chúng converge về SIMILAR decision boundaries.                         │
+│                                                                         │
+│  → Less diversity = Less complementary predictions                      │
+│  → Ensemble benefit bị giảm                                             │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Giải thích lý thuyết:
+
+**Ensemble Learning** hoạt động tốt nhất khi các base learners có **diverse predictions**:
+- Mỗi model mắc lỗi ở **những samples khác nhau**
+- Khi combine, các lỗi **triệt tiêu lẫn nhau**
+
+Khi Optuna tối ưu cả XGBoost và LightGBM:
+1. Cả hai đều maximize ROC-AUC trên **cùng validation set**
+2. Chúng học được **similar patterns**
+3. Diversity giảm → Ensemble benefit giảm
+
+#### So sánh Meta-learner Weights:
+
+| Component | Baseline Ensemble | Optuna Ensemble |
+|-----------|-------------------|-----------------|
+| XGBoost weight | 6.79 | 14.65 |
+| LightGBM weight | 1.18 | -5.84 |
+| IForest weight | -0.38 | -0.17 |
+
+> **Observation:** Meta-learner phải dùng weight **âm** cho LightGBM (-5.84) để "điều chỉnh" sự trùng lặp giữa hai models.
+
+#### Kết luận và Recommendation:
+
+| Use Case | Recommended Model | Lý do |
+|----------|-------------------|-------|
+| **Single Model Production** | LightGBM + Optuna | Best ROC-AUC (0.9423) |
+| **Ensemble Production** | Baseline Ensemble | Better diversity (0.9403) |
+| **Research/Comparison** | Both approaches | Demonstrate understanding |
+
+> 💡 **Key Insight:** Trong Ensemble Learning, **diversity quan trọng hơn individual accuracy**. Đây là lý do tại sao các winning solutions trên Kaggle thường dùng **diverse models** (XGBoost + LightGBM + Neural Net + Random Forest) thay vì chỉ tune một loại model.
 
 ---
 

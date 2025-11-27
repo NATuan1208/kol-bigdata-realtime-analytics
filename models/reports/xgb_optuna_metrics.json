@@ -1,0 +1,12 @@
+{
+  "model": "XGBoost-Optuna",
+  "roc_auc": 0.9426705345002254,
+  "f1": 0.8210731707317073,
+  "accuracy": 0.8775373931623932,
+  "precision": 0.796969696969697,
+  "recall": 0.8466800804828973,
+  "n_trials": 50,
+  "cv_folds": 5,
+  "best_cv_score": 0.9416762946494559,
+  "training_time_seconds": 412.9434196949005
+}

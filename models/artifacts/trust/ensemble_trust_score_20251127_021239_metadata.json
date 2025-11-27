@@ -1,0 +1,18 @@
+{
+  "ensemble_name": "ensemble_trust_score",
+  "timestamp": "20251127_021239",
+  "metrics": {
+    "accuracy": 0.8820779914529915,
+    "precision": 0.8329177057356608,
+    "recall": 0.8064386317907445,
+    "f1_score": 0.819464322224494,
+    "roc_auc": 0.940298074676321,
+    "pr_auc": 0.9068531046896863,
+    "brier_score": 0.08773534266596941
+  },
+  "base_models": [
+    "xgboost",
+    "lightgbm",
+    "iforest"
+  ]
+}

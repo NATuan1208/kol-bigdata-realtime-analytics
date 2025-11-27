@@ -426,18 +426,20 @@ services:
       
       # MLflow model registry
       MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_MODEL_NAME_TRUST: ${MLFLOW_MODEL_NAME_TRUST:-kol-trust-ensemble}
+      MLFLOW_MODEL_NAME_TRUST: ${MLFLOW_MODEL_NAME_TRUST:-trust-score-lightgbm-optuna}
       MLFLOW_MODEL_NAME_SUCCESS: ${MLFLOW_MODEL_NAME_SUCCESS:-kol-success-blend}
       MLFLOW_MODEL_STAGE: ${MLFLOW_MODEL_STAGE:-Production}
       
       # S3 (MinIO) for model artifacts
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       MLFLOW_S3_ENDPOINT_URL: http://sme-minio:9000
+      S3_ENDPOINT_URL: http://sme-minio:9000
     ports:
       - "${API_PORT:-8000}:8080"
     volumes:
-      - ../serving/api:/app/api
+      - ../../serving/api:/app/api
+      - ../../models:/app/models
     depends_on:
       - mlflow
       - cassandra

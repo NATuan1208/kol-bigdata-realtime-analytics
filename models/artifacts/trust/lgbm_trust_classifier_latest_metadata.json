@@ -1,0 +1,63 @@
+{
+  "model_name": "lgbm_trust_classifier",
+  "timestamp": "20251127_021129",
+  "metrics": {
+    "accuracy": 0.8766025641025641,
+    "precision": 0.7989276139410187,
+    "recall": 0.8394366197183099,
+    "f1_score": 0.8186813186813187,
+    "roc_auc": 0.9405732013508192,
+    "pr_auc": 0.9093895307992416
+  },
+  "params": {
+    "n_estimators": 150,
+    "num_leaves": 31,
+    "max_depth": -1,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_samples": 20,
+    "reg_alpha": 0.1,
+    "reg_lambda": 0.1,
+    "random_state": 42,
+    "n_jobs": -1,
+    "verbose": -1,
+    "force_col_wise": true,
+    "class_weight": {
+      "0": 0.748375812093953,
+      "1": 1.506539235412475
+    }
+  },
+  "feature_names": [
+    "log_followers",
+    "log_following",
+    "log_posts",
+    "log_favorites",
+    "log_account_age",
+    "followers_following_ratio_capped",
+    "posts_per_day_capped",
+    "engagement_rate",
+    "activity_score",
+    "profile_completeness",
+    "followers_per_day",
+    "posts_per_follower",
+    "following_per_day",
+    "bio_length_norm",
+    "high_activity_flag",
+    "low_engagement_high_posts",
+    "default_profile_score",
+    "suspicious_growth",
+    "fake_follower_indicator",
+    "followers_tier",
+    "account_age_tier",
+    "activity_tier",
+    "verified_followers_interaction",
+    "profile_engagement_interaction",
+    "age_activity_interaction",
+    "has_bio",
+    "has_url",
+    "has_profile_image",
+    "verified"
+  ],
+  "n_features": 29
+}
