@@ -58,8 +58,9 @@ def get_minio_client() -> Minio:
     # Determine if using secure connection (https)
     secure = Config.MINIO_ENDPOINT.startswith("https://")
     
+    # MinIO SDK v8+ uses keyword-only arguments
     client = Minio(
-        endpoint,
+        endpoint=endpoint,
         access_key=Config.MINIO_ACCESS_KEY,
         secret_key=Config.MINIO_SECRET_KEY,
         secure=secure
@@ -115,8 +116,8 @@ def upload_jsonl_records(
     client = get_minio_client()
     
     try:
-        # Ensure bucket exists
-        if not client.bucket_exists(Config.MINIO_BUCKET):
+        # Ensure bucket exists (MinIO SDK v8+ uses keyword-only arguments)
+        if not client.bucket_exists(bucket_name=Config.MINIO_BUCKET):
             logger.error(f"Bucket '{Config.MINIO_BUCKET}' does not exist!")
             raise ValueError(f"Bucket '{Config.MINIO_BUCKET}' not found")
         
@@ -188,7 +189,7 @@ def upload_csv(
     client = get_minio_client()
     
     try:
-        if not client.bucket_exists(Config.MINIO_BUCKET):
+        if not client.bucket_exists(bucket_name=Config.MINIO_BUCKET):
             raise ValueError(f"Bucket '{Config.MINIO_BUCKET}' not found")
         
         client.put_object(
@@ -230,6 +231,7 @@ def list_objects(prefix: str, max_objects: int = 100) -> List[str]:
     client = get_minio_client()
     
     try:
+        # MinIO SDK v8+ uses keyword-only arguments
         objects = client.list_objects(
             bucket_name=Config.MINIO_BUCKET,
             prefix=prefix,
@@ -259,7 +261,8 @@ def get_object_size(key: str) -> int:
     client = get_minio_client()
     
     try:
-        stat = client.stat_object(Config.MINIO_BUCKET, key)
+        # MinIO SDK v8+ uses keyword-only arguments
+        stat = client.stat_object(bucket_name=Config.MINIO_BUCKET, object_name=key)
         return stat.size
     except S3Error:
         return -1
@@ -274,8 +277,8 @@ if __name__ == "__main__":
         client = get_minio_client()
         print(f"✅ MinIO client created\n")
         
-        # Test bucket existence
-        exists = client.bucket_exists(Config.MINIO_BUCKET)
+        # Test bucket existence (MinIO SDK v8+ uses keyword-only arguments)
+        exists = client.bucket_exists(bucket_name=Config.MINIO_BUCKET)
         print(f"Bucket '{Config.MINIO_BUCKET}' exists: {exists}\n")
         
         # Test upload with sample data

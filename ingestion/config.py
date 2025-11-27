@@ -21,7 +21,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env.kol from project root
-env_path = Path(__file__).parent.parent / '.env.kol'
+project_root = Path(__file__).parent.parent
+env_path = project_root / '.env'
 load_dotenv(dotenv_path=env_path)
 
 
@@ -43,6 +44,7 @@ class Config:
         "youtube_trending": "youtube_trending",
         "instagram_influencer": "instagram_influencer",  # Phase 1B: Instagram dataset
         "short_video_trends": "short_video_trends",  # Phase 1B: YouTube Shorts + TikTok
+        "twitter_human_bots": "twitter_human_bots",  # Phase 1B: Twitter bot/human labeled data
     }
     
     @staticmethod
