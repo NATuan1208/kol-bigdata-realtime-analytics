@@ -178,8 +178,8 @@ services:
       - "${SPARK_MASTER_PORT:-7077}:7077"
       - "${SPARK_MASTER_UI_PORT:-8084}:8080"
     volumes:
-      - ../streaming/spark_jobs:/opt/spark-jobs
-      - ../batch:/opt/batch
+      - ../../streaming/spark_jobs:/opt/spark-jobs
+      - ../../batch:/opt/batch
       - spark_warehouse:/opt/spark/work-dir
       - spark_checkpoints:/opt/spark/checkpoints
     depends_on:
@@ -208,8 +208,8 @@ services:
       # Kafka configuration for Structured Streaming
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
     volumes:
-      - ../streaming/spark_jobs:/opt/spark-jobs
-      - ../batch:/opt/batch
+      - ../../streaming/spark_jobs:/opt/spark-jobs
+      - ../../batch:/opt/batch
       - spark_warehouse:/opt/spark/work-dir
       - spark_checkpoints:/opt/spark/checkpoints
     depends_on:
@@ -234,7 +234,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     volumes:
-      - ../streaming/spark_jobs:/opt/spark-jobs
+      - ../../streaming/spark_jobs:/opt/spark-jobs
+      - ../../batch:/opt/batch
       - spark_checkpoints:/opt/spark/checkpoints
     depends_on:
       spark-master:

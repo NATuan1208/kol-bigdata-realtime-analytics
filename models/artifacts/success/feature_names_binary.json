@@ -1,0 +1,23 @@
+[
+  "video_views",
+  "video_likes",
+  "video_comments",
+  "video_shares",
+  "engagement_total",
+  "engagement_rate",
+  "est_clicks",
+  "est_ctr",
+  "likes_per_view",
+  "comments_per_view",
+  "shares_per_view",
+  "log_views",
+  "log_engagement",
+  "log_clicks",
+  "log_price",
+  "price",
+  "price_tier",
+  "engagement_x_ctr",
+  "views_x_ctr",
+  "is_viral_views",
+  "is_high_engagement"
+]

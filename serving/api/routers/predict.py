@@ -449,3 +449,290 @@ async def get_model_info():
             "status": "error",
             "error": str(e)
         }
+
+# ============================================================
+# SUCCESSSCORE ENDPOINTS (V2 - Binary Classification)
+# ============================================================
+
+class SuccessRequest(BaseModel):
+    """Request model for SuccessScore prediction V2."""
+    kol_id: str = Field(..., description="KOL identifier")
+    video_views: float = Field(0, description="Video view count")
+    video_likes: float = Field(0, description="Video likes")
+    video_comments: float = Field(0, description="Video comments")
+    video_shares: float = Field(0, description="Video shares")
+    engagement_total: float = Field(0, description="Total engagement (likes+comments+shares)")
+    engagement_rate: float = Field(0, description="Engagement rate (engagement/views)")
+    est_clicks: float = Field(0, description="Estimated clicks")
+    est_ctr: float = Field(0, description="Estimated CTR")
+    price: float = Field(0, description="Product price")
+    
+class SuccessResponse(BaseModel):
+    """Response model for SuccessScore prediction."""
+    kol_id: str
+    success_score: float = Field(..., ge=0, le=100)
+    success_label: str = Field(..., description="High or Not-High (binary)")
+    confidence: float = Field(..., ge=0, le=1)
+    method: str = Field(default="ml", description="ml or rule_based")
+    model_version: str = Field(default="v2")
+    timestamp: str
+
+# SuccessScore model cache
+_success_model = None
+_success_scaler = None
+_success_features = None
+
+def get_success_model():
+    """Load SuccessScore model from artifacts."""
+    global _success_model, _success_scaler, _success_features
+    
+    if _success_model is None:
+        import joblib
+        import json
+        from pathlib import Path
+        
+        artifacts_dir = Path(__file__).parent.parent.parent.parent / "models" / "artifacts" / "success"
+        
+        if not artifacts_dir.exists():
+            raise FileNotFoundError(f"Artifacts directory not found: {artifacts_dir}")
+        
+        model_path = artifacts_dir / "success_lgbm_model.pkl"
+        scaler_path = artifacts_dir / "success_scaler.pkl"
+        features_path = artifacts_dir / "feature_names.json"
+        
+        _success_model = joblib.load(model_path)
+        _success_scaler = joblib.load(scaler_path)
+        
+        with open(features_path, 'r') as f:
+            _success_features = json.load(f)
+    
+    return _success_model, _success_scaler, _success_features
+
+@router.post("/success", response_model=SuccessResponse)
+async def predict_success_score(request: SuccessRequest):
+    """
+    Predict SuccessScore for a KOL's product promotion (V2 - Binary).
+    
+    SuccessScore measures the likelihood of successful product sales
+    based on KOL engagement metrics and product characteristics.
+    
+    Labels (Binary Classification):
+    - High: Top 25% sales potential (score >= 50)
+    - Not-High: Bottom 75% sales potential (score < 50)
+    """
+    import numpy as np
+    import math
+    
+    try:
+        model, scaler, feature_names = get_success_model()
+        
+        # Auto-calculate derived features if not provided
+        views = max(request.video_views, 1)
+        engagement = request.engagement_total or (request.video_likes + request.video_comments + request.video_shares)
+        eng_rate = request.engagement_rate or (engagement / views)
+        
+        # Build feature vector matching model V2's feature_names.json (21 features)
+        feature_map = {
+            # Core metrics
+            'video_views': request.video_views,
+            'video_likes': request.video_likes,
+            'video_comments': request.video_comments,
+            'video_shares': request.video_shares,
+            'engagement_total': engagement,
+            'engagement_rate': eng_rate,
+            'est_clicks': request.est_clicks,
+            'est_ctr': request.est_ctr,
+            # Ratios
+            'likes_per_view': request.video_likes / views,
+            'comments_per_view': request.video_comments / views,
+            'shares_per_view': request.video_shares / views,
+            # Log transforms
+            'log_views': math.log1p(request.video_views),
+            'log_engagement': math.log1p(engagement),
+            'log_clicks': math.log1p(request.est_clicks),
+            'log_price': math.log1p(request.price),
+            # Price features
+            'price': request.price,
+            'price_tier': min(4, int(request.price / 200000)),  # Simplified binning
+            # Interactions
+            'engagement_x_ctr': eng_rate * request.est_ctr,
+            'views_x_ctr': request.video_views * request.est_ctr,
+            # Indicators (thresholds based on training data)
+            'is_viral_views': 1 if request.video_views > 500000 else 0,
+            'is_high_engagement': 1 if eng_rate > 0.05 else 0,
+        }
+        
+        # Create feature array in correct order
+        features = np.array([[feature_map.get(f, 0) for f in feature_names]])
+        
+        # Scale features
+        features_scaled = scaler.transform(features)
+        
+        # Predict (Binary: 0=Not-High, 1=High)
+        if hasattr(model, 'predict_proba'):
+            proba = model.predict_proba(features_scaled)[0]
+            pred_class = int(np.argmax(proba))
+            confidence = float(proba[pred_class])
+            # Score = probability of High class * 100
+            success_score = float(proba[1]) * 100
+        else:
+            pred_class = int(model.predict(features_scaled)[0])
+            confidence = 0.7
+            success_score = 75 if pred_class == 1 else 25
+        
+        # Map to labels (Binary)
+        success_label = 'High' if pred_class == 1 else 'Not-High'
+        
+        return SuccessResponse(
+            kol_id=request.kol_id,
+            success_score=round(success_score, 2),
+            success_label=success_label,
+            confidence=round(confidence, 4),
+            method="ml",
+            model_version="v2_binary",
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except FileNotFoundError as e:
+        # Fallback to rule-based
+        engagement = request.engagement_total or (request.video_likes + request.video_comments + request.video_shares)
+        eng_rate = request.engagement_rate or (engagement / max(request.video_views, 1))
+        
+        # Rule-based scoring
+        score = 0
+        score += min(30, request.video_views / 50000 * 30)  # Views contribution
+        score += min(30, eng_rate * 300)  # Engagement rate contribution
+        score += min(20, request.est_ctr * 200)  # CTR contribution
+        score += min(20, engagement / 5000 * 20)  # Total engagement contribution
+        
+        success_label = 'High' if score >= 50 else 'Not-High'
+        
+        return SuccessResponse(
+            kol_id=request.kol_id,
+            success_score=round(score, 2),
+            success_label=success_label,
+            confidence=0.6,
+            method="rule_based",
+            model_version="v2_fallback",
+            timestamp=datetime.now().isoformat()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# TRENDINGSCORE ENDPOINTS (V2 - Improved Formula)
+# ============================================================
+
+class TrendingRequest(BaseModel):
+    """Request model for TrendingScore calculation V2."""
+    kol_id: str = Field(..., description="KOL identifier")
+    current_velocity: float = Field(..., description="Current weighted event velocity")
+    baseline_velocity: float = Field(1.0, description="KOL's historical baseline velocity")
+    global_avg_velocity: float = Field(1.0, description="Global average velocity")
+    momentum: float = Field(0.0, description="Rate of change (acceleration)")
+
+class TrendingResponse(BaseModel):
+    """Response model for TrendingScore V2."""
+    kol_id: str
+    trending_score: float = Field(..., ge=0, le=100)
+    trending_label: str = Field(..., description="Cold/Normal/Warm/Hot/Viral")
+    personal_growth: float = Field(..., description="Growth vs own baseline")
+    market_position: float = Field(..., description="Position vs market average")
+    raw_score: float
+    model_version: str = Field(default="v2")
+    timestamp: str
+
+@router.post("/trending", response_model=TrendingResponse)
+async def calculate_trending_score(request: TrendingRequest):
+    """
+    Calculate TrendingScore V2 for a KOL based on activity velocity.
+    
+    Improved formula with:
+    - Personal growth (50% weight): current / baseline
+    - Market position (30% weight): current / global_avg
+    - Momentum (20% weight): acceleration/deceleration
+    
+    Sigmoid normalization for bounded output.
+    
+    Labels (score ranges):
+    - Cold: 0-25 (declining or inactive)
+    - Normal: 25-40 (steady state)
+    - Warm: 40-60 (growing interest)
+    - Hot: 60-80 (significant momentum)
+    - Viral: 80-100 (explosive growth)
+    """
+    import math
+    
+    try:
+        # Avoid division by zero
+        baseline = max(request.baseline_velocity, 0.1)
+        global_avg = max(request.global_avg_velocity, 0.1)
+        
+        # Calculate components
+        personal_growth = request.current_velocity / baseline
+        market_position = request.current_velocity / global_avg
+        
+        # Weighted combination (V2 formula)
+        # α=0.5 (personal growth), β=0.3 (market), γ=0.2 (momentum)
+        raw_score = (
+            0.5 * personal_growth +
+            0.3 * market_position +
+            0.2 * (1 + request.momentum)  # Normalized around 1
+        )
+        
+        # Sigmoid normalization to [0, 100]
+        # Tuned: raw_score=1 → ~30, raw_score=2 → ~50, raw_score=5 → ~85
+        k = 0.8  # Steepness
+        threshold = 2.0  # Center point
+        trending_score = 100 / (1 + math.exp(-k * (raw_score - threshold)))
+        trending_score = max(0, min(100, trending_score))
+        
+        # Determine label (adjusted thresholds for V2)
+        if trending_score >= 80:
+            trending_label = 'Viral'
+        elif trending_score >= 60:
+            trending_label = 'Hot'
+        elif trending_score >= 40:
+            trending_label = 'Warm'
+        elif trending_score >= 25:
+            trending_label = 'Normal'
+        else:
+            trending_label = 'Cold'
+        
+        return TrendingResponse(
+            kol_id=request.kol_id,
+            trending_score=round(trending_score, 2),
+            trending_label=trending_label,
+            personal_growth=round(personal_growth, 4),
+            market_position=round(market_position, 4),
+            raw_score=round(raw_score, 4),
+            model_version="v2",
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/success/model-info")
+async def get_success_model_info():
+    """Get information about the SuccessScore model."""
+    try:
+        model, scaler, feature_names = get_success_model()
+        
+        return {
+            "model_type": "LightGBM Classifier",
+            "num_classes": 3,
+            "class_labels": ["Low", "Medium", "High"],
+            "features_count": len(feature_names),
+            "feature_names": feature_names,
+            "status": "loaded"
+        }
+    except Exception as e:
+        return {
+            "model_type": "LightGBM Classifier",
+            "status": "not_loaded",
+            "fallback": "rule_based",
+            "error": str(e)
+        }
