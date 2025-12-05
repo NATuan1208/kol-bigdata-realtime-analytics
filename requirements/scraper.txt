@@ -1,0 +1,19 @@
+# KOL Scraper Dependencies
+# ========================
+
+# Web scraping
+selenium>=4.15.0
+webdriver-manager>=4.0.0  # Auto-download ChromeDriver
+yt-dlp>=2024.0.0
+
+# Playwright (alternative, better anti-detection)
+playwright>=1.40.0
+playwright-stealth>=2.0.0
+
+# Kafka
+kafka-python>=2.0.2
+
+# Utils
+requests>=2.31.0
+tqdm>=4.66.0
+

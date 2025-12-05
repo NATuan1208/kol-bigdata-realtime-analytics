@@ -1,0 +1,2 @@
+-- Example Iceberg catalog objects
+-- TODO: Create tables for gold views & metrics

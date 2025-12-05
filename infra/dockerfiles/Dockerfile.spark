@@ -1,0 +1,48 @@
+# ============================================================================
+# Dockerfile for KOL Spark with Iceberg + S3A Support
+# ============================================================================
+# Extended apache/spark:3.5.0 with additional JARs for:
+#   - Apache Iceberg (Iceberg Spark SQL extensions + runtime)
+#   - AWS S3A (Hadoop AWS connector for MinIO)
+#   - Necessary dependencies
+# ============================================================================
+
+FROM apache/spark:3.5.0
+
+# Switch to root to install packages
+USER root
+
+# Install curl and wget for downloading JARs
+RUN apt-get update && apt-get install -y curl wget && rm -rf /var/lib/apt/lists/*
+
+# Create a directory for additional JARs
+RUN mkdir -p /opt/spark/extra-jars
+
+# Download Iceberg Spark extensions and runtime
+# Version: 1.4.0 (compatible with Spark 3.5.0)
+RUN wget -q -O /opt/spark/extra-jars/iceberg-spark-runtime-3.5_2.12-1.4.0.jar \
+    "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/1.4.0/iceberg-spark-runtime-3.5_2.12-1.4.0.jar"
+
+# Download Hadoop AWS connector (for S3A)
+# Version: 3.3.4 (matches Hadoop version in Spark)
+RUN wget -q -O /opt/spark/extra-jars/hadoop-aws-3.3.4.jar \
+    "https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar"
+
+# Download AWS Java SDK (dependency for hadoop-aws)
+# Version: 1.11.1034 (compatible with hadoop-aws 3.3.4)
+RUN wget -q -O /opt/spark/extra-jars/aws-java-sdk-bundle-1.11.1034.jar \
+    "https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.11.1034/aws-java-sdk-bundle-1.11.1034.jar"
+
+# Copy extra JARs to Spark jars directory
+RUN cp /opt/spark/extra-jars/*.jar /opt/spark/jars/
+
+# Verify JARs were copied
+RUN ls -lh /opt/spark/jars/iceberg-spark-runtime*.jar && \
+    ls -lh /opt/spark/jars/hadoop-aws*.jar && \
+    ls -lh /opt/spark/jars/aws-java-sdk-bundle*.jar
+
+# Switch back to spark user
+USER spark
+
+# Verify Iceberg can be loaded (this will be tested at runtime)
+ENV SPARK_CLASSPATH=/opt/spark/jars/*

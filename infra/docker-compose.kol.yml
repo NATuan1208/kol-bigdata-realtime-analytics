@@ -1,0 +1,609 @@
+# ============================================================================
+# KOL BIG DATA ANALYTICS — Project-Specific Infrastructure
+# ============================================================================
+#
+# DOMAIN SEPARATION PHILOSOPHY:
+# ------------------------------
+# SME Pulse and KOL Analytics are INDEPENDENT projects/domains.
+# They share the SAME infrastructure INSTANCE locally for resource optimization:
+#   - Same MinIO instance → but DIFFERENT buckets (kol-bronze, kol-silver, kol-gold)
+#   - Same PostgreSQL instance → but DIFFERENT databases (kol_mlflow, kol_metadata)
+#   - Same Trino instance → but DIFFERENT schemas (iceberg.kol_*)
+#   - Same Airflow instance → but DIFFERENT DAGs/namespaces
+#
+# This is LOCAL DEV optimization to avoid duplicate containers.
+# In PRODUCTION, each project runs on separate infrastructure.
+#
+# SHARED INFRASTRUCTURE (from SME Pulse):
+#   - MinIO (sme-minio) - S3-compatible storage
+#   - PostgreSQL (sme-postgres) - Relational database
+#   - Trino (sme-trino) - SQL query engine
+#   - Hive Metastore (sme-hive-metastore) - Iceberg catalog
+#   - Airflow (sme-airflow-webserver) - Workflow orchestration
+#
+# KOL-SPECIFIC SERVICES (this file):
+#   - Redpanda (Kafka), Spark, MLflow, Cassandra, Redis, Trainer, API
+#
+# Prerequisites:
+#   1. SME Pulse project must be running
+#   2. Shared network 'sme-network' must exist: docker network create sme-network
+#   3. SME Pulse services must be on 'sme-network'
+#   4. KOL buckets created in MinIO: kol-bronze, kol-silver, kol-gold, kol-mlflow
+#   5. KOL database created in PostgreSQL: kol_mlflow
+#
+# Usage:
+#   docker compose -f docker-compose.kol.yml up -d
+# ============================================================================
+
+# ============================================================================
+# NETWORKS — Connect to SME Pulse shared network
+# ============================================================================
+networks:
+  sme-network:
+    external: true
+    name: sme_pulse_sme-network
+
+# ============================================================================
+# VOLUMES — KOL-specific persistent storage
+# ============================================================================
+volumes:
+  redpanda_data:
+    name: kol_redpanda_data
+  cassandra_data:
+    name: kol_cassandra_data
+  redis_data:
+    name: kol_redis_data
+  mlflow_data:
+    name: kol_mlflow_data
+  spark_checkpoints:
+    name: kol_spark_checkpoints
+  spark_events:
+    name: kol_spark_events
+  spark_warehouse:
+    name: kol_spark_warehouse
+
+# ============================================================================
+# SERVICES
+# ============================================================================
+services:
+
+  # ==========================================================================
+  # STREAMING LAYER — Redpanda (Kafka-compatible, simpler than Kafka+Zookeeper)
+  # ==========================================================================
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.3
+    container_name: kol-redpanda
+    hostname: redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-19092}:19092"  # Kafka API (external)
+      - "${KAFKA_PROXY_PORT:-18082}:18082"     # HTTP Proxy (external)
+      - "${SCHEMA_REGISTRY_PORT:-18081}:18081" # Schema Registry (external)
+      - "9644:9644"                             # Prometheus metrics
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    networks:
+      - sme-network
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Redpanda Console (Kafka UI)
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.4.0
+    container_name: kol-redpanda-console
+    hostname: redpanda-console
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_SCHEMAREGISTRY_ENABLED: "true"
+      KAFKA_SCHEMAREGISTRY_URLS: http://redpanda:8081
+    ports:
+      - "${KAFKA_UI_PORT:-8082}:8080"
+    volumes:
+      - ./redpanda/console-config.yml:/tmp/config.yml
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - sme-network
+
+  # Initialize Kafka topics
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.3
+    container_name: kol-redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: >
+      /bin/bash -c "
+      echo 'Creating Kafka topics...';
+      
+      echo '=== KOL Discovery Pipeline Topics ===';
+      rpk topic create kol.discovery.pending --brokers redpanda:9092 --partitions 4 --replicas 1 || true;
+      rpk topic create kol.discovery.raw --brokers redpanda:9092 --partitions 4 --replicas 1 || true;
+      rpk topic create kol.videos.raw --brokers redpanda:9092 --partitions 6 --replicas 1 || true;
+      rpk topic create kol.events.discovery --brokers redpanda:9092 --partitions 2 --replicas 1 || true;
+      rpk topic create kol.events.enricher --brokers redpanda:9092 --partitions 2 --replicas 1 || true;
+      
+      echo '=== Legacy/General Topics ===';
+      rpk topic create events.social.raw --brokers redpanda:9092 --partitions 6 --replicas 1 || true;
+      rpk topic create events.web.raw --brokers redpanda:9092 --partitions 6 --replicas 1 || true;
+      rpk topic create events.tx.raw --brokers redpanda:9092 --partitions 6 --replicas 1 || true;
+      rpk topic create features.stream --brokers redpanda:9092 --partitions 4 --replicas 1 || true;
+      rpk topic create alerts.stream --brokers redpanda:9092 --partitions 2 --replicas 1 || true;
+      rpk topic create metrics.windowed --brokers redpanda:9092 --partitions 4 --replicas 1 || true;
+      
+      echo 'Topics created successfully';
+      rpk topic list --brokers redpanda:9092;
+      exit 0;
+      "
+    networks:
+      - sme-network
+
+  # ==========================================================================
+  # STREAM PROCESSING — Spark Structured Streaming (Hot Path, Real-time)
+  # ==========================================================================
+  # Using Spark Structured Streaming for both hot path (real-time) and cold path (batch)
+  # - Unified engine: Same Spark for streaming and batch
+  # - Micro-batch processing with configurable intervals (1-10s)
+  # - Exactly-once semantics with checkpointing
+  # - Rich ecosystem: MLlib, SQL, DataFrame API
+  # - Easy integration with Kafka, Iceberg, Cassandra
+  
+  # Note: Spark Master and Workers handle BOTH streaming and batch workloads
+  # ==========================================================================
+  # PROCESSING — Apache Spark (Unified for Streaming + Batch)
+  # ==========================================================================
+  
+  spark-master:
+    image: kol-spark-with-iceberg:latest
+    container_name: kol-spark-master
+    hostname: spark-master
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+    ports:
+      - "${SPARK_MASTER_PORT:-7077}:7077"
+      - "${SPARK_MASTER_UI_PORT:-8084}:8080"
+    volumes:
+      - ../streaming/spark_jobs:/opt/spark-jobs
+      - ../batch:/opt/batch
+      - spark_warehouse:/opt/spark/work-dir
+      - spark_checkpoints:/opt/spark/checkpoints
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - sme-network
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  spark-worker:
+    image: kol-spark-with-iceberg:latest
+    hostname: spark-worker
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+    volumes:
+      - ../streaming/spark_jobs:/opt/spark-jobs
+      - ../batch:/opt/batch
+      - spark_warehouse:/opt/spark/work-dir
+      - spark_checkpoints:/opt/spark/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks:
+      - sme-network
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--memory", "2G", "--cores", "2"]
+    deploy:
+      replicas: 2  # Scale as needed
+  
+  # Spark Streaming Driver (for running streaming jobs)
+  spark-streaming:
+    image: kol-spark-with-iceberg:latest
+    container_name: kol-spark-streaming
+    hostname: spark-streaming
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ../streaming/spark_jobs:/opt/spark-jobs
+      - spark_checkpoints:/opt/spark/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sme-network
+    command: ["tail", "-f", "/dev/null"]  # Keep running for manual job submission
+
+  # Spark History Server (for job analysis)
+  spark-history:
+    image: kol-spark-with-iceberg:latest
+    container_name: kol-spark-history
+    hostname: spark-history
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_HISTORY_OPTS=-Dspark.history.fs.logDirectory=file:/spark-events
+    ports:
+      - "${SPARK_HISTORY_PORT:-18080}:18080"
+    volumes:
+      - spark_events:/spark-events
+    networks:
+      - sme-network
+    entrypoint: ["/bin/sh", "-c"]
+    command: 
+      - |
+        mkdir -p /spark-events
+        /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
+
+  # ==========================================================================
+  # TIME-SERIES DATABASE — Cassandra (Real-time metrics storage)
+  # ==========================================================================
+  cassandra:
+    image: cassandra:4.1
+    container_name: kol-cassandra
+    hostname: cassandra
+    environment:
+      - CASSANDRA_CLUSTER_NAME=KOL_Cluster
+      - CASSANDRA_DC=dc1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - MAX_HEAP_SIZE=1G
+      - HEAP_NEWSIZE=256M
+    ports:
+      - "${CASSANDRA_PORT:-9042}:9042"  # CQL
+      - "7000:7000"                      # Inter-node
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      - ./cassandra/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - sme-network
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ==========================================================================
+  # CACHE & PUB/SUB — Redis (Feature cache, real-time alerts)
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: kol-redis
+    hostname: redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - sme-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # MLOPS — MLflow Tracking Server (Experiment tracking & Model registry)
+  # ==========================================================================
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.9.2
+    container_name: kol-mlflow
+    hostname: mlflow
+    entrypoint: /bin/bash -c "pip install psycopg2-binary && mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri postgresql://${POSTGRES_USER:-sme}:${POSTGRES_PASSWORD:-sme123}@sme-postgres:5432/kol_mlflow --default-artifact-root s3://kol-mlflow/artifacts --serve-artifacts"
+    environment:
+      # S3 (MinIO) configuration for artifact storage
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MLFLOW_S3_ENDPOINT_URL: http://sme-minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    networks:
+      - sme-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ==========================================================================
+  # TRAINING SERVICE — Batch & Online ML Training
+  # ==========================================================================
+  trainer:
+    build:
+      context: ../
+      dockerfile: ./infra/dockerfiles/Dockerfile.trainer
+    container_name: kol-trainer
+    hostname: trainer
+    environment:
+      # Data sources
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+      REDIS_URL: redis://redis:6379/0
+      TRINO_HOST: sme-trino
+      TRINO_PORT: 8080
+      
+      # MLflow
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-KOL_models}
+      
+      # S3 (MinIO) for data access - KOL domain buckets
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MLFLOW_S3_ENDPOINT_URL: http://sme-minio:9000
+      S3_ENDPOINT_URL: http://sme-minio:9000
+      MINIO_BUCKET_BRONZE: ${MINIO_BUCKET_BRONZE:-kol-bronze}
+      MINIO_BUCKET_SILVER: ${MINIO_BUCKET_SILVER:-kol-silver}
+      MINIO_BUCKET_GOLD: ${MINIO_BUCKET_GOLD:-kol-gold}
+      
+      # Trino KOL schemas
+      TRINO_SCHEMA_BRONZE: ${TRINO_SCHEMA_BRONZE:-kol_bronze}
+      TRINO_SCHEMA_SILVER: ${TRINO_SCHEMA_SILVER:-kol_silver}
+      TRINO_SCHEMA_GOLD: ${TRINO_SCHEMA_GOLD:-kol_gold}
+      
+      # Training config
+      TRAIN_MODE: ${TRAIN_MODE:-batch}  # batch | online | auto
+      ENABLE_GPU: ${ENABLE_GPU:-false}
+    volumes:
+      - ../models:/app/models
+      - ../batch:/app/batch
+      - ../data:/app/data  # Local data for development
+    depends_on:
+      mlflow:
+        condition: service_started
+      redpanda:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sme-network
+    command: ["tail", "-f", "/dev/null"]  # Keep running for manual job execution
+    # For production, use: command: ["python", "-m", "models.registry.model_versioning"]
+
+  # ==========================================================================
+  # INFERENCE API — Model Serving (REST API)
+  # ==========================================================================
+  api:
+    build:
+      context: ../
+      dockerfile: ./infra/dockerfiles/Dockerfile.api
+    container_name: kol-api
+    hostname: api
+    environment:
+      # Service config
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_WORKERS: ${API_WORKERS:-4}
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:-dev-token-change-in-production}
+      
+      # Data sources
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+      REDIS_URL: redis://redis:6379/0
+      
+      # MLflow model registry
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_MODEL_NAME_TRUST: ${MLFLOW_MODEL_NAME_TRUST:-kol-trust-ensemble}
+      MLFLOW_MODEL_NAME_SUCCESS: ${MLFLOW_MODEL_NAME_SUCCESS:-kol-success-blend}
+      MLFLOW_MODEL_STAGE: ${MLFLOW_MODEL_STAGE:-Production}
+      
+      # S3 (MinIO) for model artifacts
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MLFLOW_S3_ENDPOINT_URL: http://sme-minio:9000
+    ports:
+      - "${API_PORT:-8000}:8080"
+    volumes:
+      - ../serving/api:/app/api
+    depends_on:
+      mlflow:
+        condition: service_started
+      cassandra:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sme-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ==========================================================================
+  # OPTIONAL — Jupyter Notebook (Ad-hoc analysis & development)
+  # ==========================================================================
+  jupyter:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: kol-jupyter
+    hostname: jupyter
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      GRANT_SUDO: "yes"
+      # Spark configuration
+      SPARK_MASTER: spark://spark-master:7077
+      # Data access
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_ENDPOINT_URL: http://sme-minio:9000
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    volumes:
+      - ../notebooks:/home/jovyan/work
+      - ../models:/home/jovyan/models
+      - ../data:/home/jovyan/data
+    networks:
+      - sme-network
+    command:
+      - "start-notebook.sh"
+      - "--NotebookApp.token=''"
+      - "--NotebookApp.password=''"
+
+  # ==========================================================================
+  # KOL SCRAPER — TikTok Scraper Daemon (Real-time Data Collection)
+  # ==========================================================================
+  # Runs continuously, scraping TikTok data and pushing to Kafka
+  # - Discovery: Find new KOLs from search/FYP
+  # - Profile: Scrape profile stats (followers, likes, bio)
+  # - Videos: Scrape video stats (views, likes, comments, shares)
+  # - Comments: Scrape comment text for sentiment analysis
+  # - Products: Check TikTok Shop products
+  
+  kol-scraper:
+    build:
+      context: ..
+      dockerfile: infra/dockerfiles/Dockerfile.scraper
+    container_name: kol-scraper
+    hostname: kol-scraper
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - PYTHONUNBUFFERED=1
+      - DOCKER_CONTAINER=1
+      - DISPLAY=:99
+      - CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
+      # Timezone to match host (Vietnam)
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ../data/scrape:/app/data/scrape  # Persist checkpoint
+      - ../data/chrome_profile:/app/data/chrome_profile  # Mount verified Chrome profile!
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - sme-network
+    restart: unless-stopped
+    # Start Xvfb then run Python scraper
+    command:
+      - bash
+      - -c
+      - |
+        Xvfb :99 -screen 0 1920x1080x24 &
+        sleep 2
+        export DISPLAY=:99
+        python ingestion/sources/kol_scraper.py daemon \
+          --interval 300 \
+          --max-kols-per-round 10 \
+          --max-videos-per-kol 20 \
+          --with-comments \
+          --kafka-broker redpanda:9092
+
+  # ==========================================================================
+  # KOL KAFKA TO ICEBERG — Spark Streaming (Real-time Data Ingestion)
+  # ==========================================================================
+  # Consumes from Kafka topics and writes to Iceberg tables
+  # - kol.discovery.raw → iceberg.kol_bronze.discovery
+  # - kol.profiles.raw  → iceberg.kol_bronze.profiles
+  # - kol.videos.raw    → iceberg.kol_bronze.videos
+  # - kol.comments.raw  → iceberg.kol_bronze.comments
+  # - kol.products.raw  → iceberg.kol_bronze.products
+  
+  kol-streaming:
+    image: kol-spark-with-iceberg:latest
+    container_name: kol-streaming
+    hostname: kol-streaming
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - MINIO_ENDPOINT=http://sme-minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    volumes:
+      - ../streaming/spark_jobs:/opt/spark-jobs
+      - spark_checkpoints:/opt/spark/checkpoints
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+    networks:
+      - sme-network
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
+      --conf spark.driver.extraJavaOptions=-Divy.cache.dir=/tmp -Divy.home=/tmp
+      /opt/spark-jobs/kol_kafka_to_iceberg.py
+
+  # ==========================================================================
+  # MONITORING — Prometheus & Grafana (Optional, for observability)
+  # ==========================================================================
+  # Uncomment if you want to enable monitoring stack
+  
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: kol-prometheus
+  #   hostname: prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #   ports:
+  #     - "${PROMETHEUS_PORT:-9090}:9090"
+  #   volumes:
+  #     - ../monitoring/prometheus:/etc/prometheus
+  #     - prometheus_data:/prometheus
+  #   networks:
+  #     - data-platform-net
+
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: kol-grafana
+  #   hostname: grafana
+  #   environment:
+  #     - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+  #     - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+  #     - GF_INSTALL_PLUGINS=redis-datasource
+  #   ports:
+  #     - "${GRAFANA_PORT:-3000}:3000"
+  #   volumes:
+  #     - ../monitoring/grafana:/etc/grafana/provisioning
+  #     - grafana_data:/var/lib/grafana
+  #   depends_on:
+  #     - prometheus
+  #   networks:
+  #     - data-platform-net
+
