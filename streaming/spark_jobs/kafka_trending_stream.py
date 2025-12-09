@@ -102,6 +102,7 @@ def foreach_batch_update_redis(batch_df, batch_id):
     # Aggregate TỔNG metrics per username (không phải MAX)
     # Tính SUM để track tổng engagement của tất cả videos
     agg = valid_df.groupBy("username").agg(
+        expr("first(platform) as platform"),      # Platform (tiktok/youtube)
         expr("sum(view_count) as view_now"),      # Tổng views tất cả videos
         expr("sum(like_count) as like_now"),      # Tổng likes
         expr("sum(share_count) as share_now"),    # Tổng shares
@@ -118,6 +119,7 @@ def foreach_batch_update_redis(batch_df, batch_id):
     updated_count = 0
     for row in rows:
         username = row["username"]
+        platform = row["platform"]
         if not username:
             continue
             
@@ -146,6 +148,7 @@ def foreach_batch_update_redis(batch_df, batch_id):
 
         # Store as hash
         mapping = {
+            "platform": platform,  # Multi-platform support
             "score": float(score),
             "view": int(view_now),
             "like": int(like_now),

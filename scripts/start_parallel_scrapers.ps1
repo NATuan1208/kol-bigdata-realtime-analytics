@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Flow mới (tối ưu thời gian + trending velocity):
-    1. Scraper discovery username → push kol.discovery.raw
+    1. Scraper discovery username → push TOP N lên kol.discovery.raw (GIỚI HẠN!)
     2. Cả 3 workers cùng lắng nghe discovery.raw:
        - Video Stats Worker: lấy profile + video stats
        - Comment Extractor: lấy comments từ videos
@@ -16,6 +16,10 @@
     Trending Flow:
     - Discovery tìm KOL mới → VideoStatsWorker scrape → Kafka → Spark → Redis
     - Metrics Refresh re-push KOL cũ → VideoStatsWorker scrape lại → velocity!
+    
+    ⚠️ QUAN TRỌNG:
+    -MaxKols 5 = Discovery có thể tìm 20-30 KOLs nhưng CHỈ PUSH TOP 5 LÊN KAFKA!
+    → Workers chỉ nhận 5 messages → Chỉ scrape 5 KOLs → Kiểm soát volume
 
 .EXAMPLE
     .\scripts\start_parallel_scrapers.ps1
@@ -100,6 +104,31 @@ Read-Host 'Press Enter to close...'
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $psCommand
     Start-Sleep -Seconds 2
 }
+
+# ==================== RESET CONSUMER GROUPS ====================
+
+Write-Host "Resetting consumer groups to LATEST..." -ForegroundColor Yellow
+Write-Host ""
+
+# Reset tất cả consumer groups về end (chỉ đọc messages mới)
+$consumerGroups = @("kol-video-stats-v3", "kol-comment-extractor-v3", "kol-product-extractor-v3")
+
+foreach ($group in $consumerGroups) {
+    try {
+        $result = docker exec kol-redpanda rpk group seek $group --to end 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  ✅ Reset $group" -ForegroundColor Green
+        } else {
+            Write-Host "  ⚠️  $group not found (will be created on first consume)" -ForegroundColor Gray
+        }
+    } catch {
+        Write-Host "  ⚠️  Could not reset $group (may not exist yet)" -ForegroundColor Gray
+    }
+}
+
+Write-Host ""
+Write-Host "=" * 60 -ForegroundColor Cyan
+Write-Host ""
 
 # ==================== START WORKERS ====================
 

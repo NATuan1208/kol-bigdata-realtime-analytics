@@ -74,7 +74,12 @@ class VideoStatsWorker(BaseConsumer):
         if not username:
             return []
         
-        print(f"\n📊 Processing @{username}")
+        # Check if this is a refresh or new discovery
+        event_type = message.get("event_type", "discovery")
+        if event_type == "refresh":
+            print(f"\n🔄 Refreshing @{username}")
+        else:
+            print(f"\n🆕 Processing @{username}")
         
         results = []
         

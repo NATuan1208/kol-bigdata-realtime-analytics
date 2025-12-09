@@ -28,26 +28,50 @@ DISCOVERY_TOPIC = "kol.discovery.raw"
 
 
 def get_tracked_kols(r: redis.Redis) -> list:
-    """Lấy danh sách KOL đang được track từ Redis"""
+    """
+    Lấy danh sách KOL đang được track từ Redis
+    Returns: List of dicts with username, platform
+    """
     keys = r.keys("streaming_scores:*")
-    usernames = []
+    kols = []
+    
     for key in keys:
-        # key = "streaming_scores:username"
-        username = key.replace("streaming_scores:", "")
-        if username:
-            usernames.append(username)
-    return usernames
+        # key format: "streaming_scores:username" (bytes or str)
+        key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+        username = key_str.replace("streaming_scores:", "")
+        
+        if not username:
+            continue
+        
+        # Get platform from streaming_scores
+        data = r.hgetall(key_str)
+        platform = data.get("platform", "tiktok")  # Default to tiktok for backward compat
+        
+        kols.append({
+            "username": username,
+            "platform": platform
+        })
+    
+    return kols
 
 
-def push_to_discovery(producer: KafkaProducer, usernames: list):
-    """Push usernames lên kol.discovery.raw để VideoStatsWorker scrape lại"""
+def push_to_discovery(producer: KafkaProducer, kols: list):
+    """
+    Push KOLs lên kol.discovery.raw để Stats Worker scrape lại
+    Supports both TikTok and YouTube
+    
+    YouTube stats worker will resolve channel_id from username via API
+    """
     count = 0
-    for username in usernames:
+    for kol in kols:
+        username = kol["username"]
+        platform = kol["platform"]
+        
         event = {
             "event_id": str(uuid.uuid4()),
             "event_time": datetime.now(timezone.utc).isoformat(),
             "event_type": "refresh",  # Đánh dấu là refresh, không phải discovery mới
-            "platform": "tiktok",
+            "platform": platform,
             "username": username,
             "source": "metrics_refresh",
         }
@@ -85,13 +109,21 @@ def main():
     try:
         while True:
             # Get tracked KOLs
-            usernames = get_tracked_kols(r)
-            print(f"\n📊 Found {len(usernames)} tracked KOLs")
+            kols = get_tracked_kols(r)
+            print(f"\n📊 Found {len(kols)} tracked KOLs")
             
-            if usernames:
+            if kols:
+                # Count by platform
+                platforms = {}
+                for kol in kols:
+                    p = kol["platform"]
+                    platforms[p] = platforms.get(p, 0) + 1
+                
+                print(f"   📱 Platforms: {', '.join([f'{p}={c}' for p, c in platforms.items()])}")
+                
                 # Push to discovery topic
-                count = push_to_discovery(producer, usernames)
-                print(f"   ✅ Pushed {count} usernames to {DISCOVERY_TOPIC}")
+                count = push_to_discovery(producer, kols)
+                print(f"   ✅ Pushed {count} KOLs to {DISCOVERY_TOPIC}")
             else:
                 print("   ⚠️ No tracked KOLs found in Redis")
             

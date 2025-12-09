@@ -414,7 +414,7 @@ services:
     environment:
       # Service config
       API_HOST: 0.0.0.0
-      API_PORT: 8000
+      API_PORT: 8080
       API_WORKERS: ${API_WORKERS:-4}
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:-dev-token-change-in-production}
       
@@ -422,7 +422,10 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       CASSANDRA_HOST: cassandra
       CASSANDRA_PORT: 9042
-      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TRINO_HOST: sme-trino
+      TRINO_PORT: 8080
       
       # MLflow model registry
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -448,7 +451,7 @@ services:
     networks:
       - sme-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -494,43 +497,48 @@ services:
   # - Comments: Scrape comment text for sentiment analysis
   # - Products: Check TikTok Shop products
   
-  kol-scraper:
+  # ==========================================================================
+  # YOUTUBE KOL SCRAPER — Automated Background Workers
+  # ==========================================================================
+  # Container chạy 4 workers song song:
+  #   1. YouTube Discovery (Selenium) - tìm trending channels
+  #   2. YouTube Stats Worker (API) - lấy channel + videos stats  
+  #   3. YouTube Comments Worker (API) - lấy comments
+  #   4. Metrics Refresh - re-push tracked channels for velocity
+  #
+  # TỰ ĐỘNG CHẠY, KHÔNG CẦN TERMINAL!
+  # ==========================================================================
+  youtube-scraper:
     build:
       context: ..
       dockerfile: infra/dockerfiles/Dockerfile.scraper
-    container_name: kol-scraper
-    hostname: kol-scraper
+    container_name: youtube-scraper
+    hostname: youtube-scraper
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - YOUTUBE_API_KEY=AIzaSyC0S6FnOZjpV7E4GzhIHhdI2boI8SzSf8g
       - PYTHONUNBUFFERED=1
       - DOCKER_CONTAINER=1
-      - DISPLAY=:99
-      - CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
-      # Timezone to match host (Vietnam)
       - TZ=Asia/Ho_Chi_Minh
+      # YouTube config
+      - REGION=VN                # YouTube region (VN, US, etc.)
+      - MAX_CHANNELS=10          # Max channels to discover
+      - MAX_VIDEOS=50            # Max videos per channel
+      - DISCOVERY_INTERVAL=21600 # 6 hours (API-based)
+      - REFRESH_INTERVAL=300     # 5 minutes
+      - ENABLE_COMMENTS=true     # Enable comments worker
+      - ENABLE_REFRESH=true      # Enable metrics refresh (track video stats every 5min)
+      - COMMENT_DELAY=2          # Delay in seconds between processing videos (0=no delay)
     volumes:
-      - ../data/scrape:/app/data/scrape  # Persist checkpoint
-      - ../data/chrome_profile:/app/data/chrome_profile  # Mount verified Chrome profile!
+      - ../data/scrape:/app/data/scrape
+      - ../data/chrome_profiles:/app/data/chrome_profiles
     depends_on:
       redpanda:
         condition: service_healthy
     networks:
       - sme-network
     restart: unless-stopped
-    # Start Xvfb then run Python scraper
-    command:
-      - bash
-      - -c
-      - |
-        Xvfb :99 -screen 0 1920x1080x24 &
-        sleep 2
-        export DISPLAY=:99
-        python ingestion/sources/kol_scraper.py daemon \
-          --interval 300 \
-          --max-kols-per-round 10 \
-          --max-videos-per-kol 20 \
-          --with-comments \
-          --kafka-broker redpanda:9092
+    entrypoint: ["/app/infra/scripts/youtube_entrypoint.sh"]
 
   # ==========================================================================
   # KOL KAFKA TO ICEBERG — Spark Streaming (Real-time Data Ingestion)
@@ -570,6 +578,29 @@ services:
       /opt/spark-jobs/kol_kafka_to_iceberg.py
 
   # ==========================================================================
+  # DASHBOARD — Streamlit UI (Real-time KOL Dashboard)
+  # ==========================================================================
+  dashboard:
+    build:
+      context: ../
+      dockerfile: ./infra/dockerfiles/Dockerfile.dashboard
+    container_name: kol-dashboard
+    hostname: dashboard
+    environment:
+      - API_URL=http://api:8080
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+    volumes:
+      - ../serving/dashboard:/app/dashboard
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - sme-network
+    restart: unless-stopped
+
+  # ==========================================================================
   # MONITORING — Prometheus & Grafana (Optional, for observability)
   # ==========================================================================
   # Uncomment if you want to enable monitoring stack
@@ -587,7 +618,7 @@ services:
   #     - ../monitoring/prometheus:/etc/prometheus
   #     - prometheus_data:/prometheus
   #   networks:
-  #     - data-platform-net
+  #     - sme-network
 
   # grafana:
   #   image: grafana/grafana:latest
@@ -605,5 +636,5 @@ services:
   #   depends_on:
   #     - prometheus
   #   networks:
-  #     - data-platform-net
+  #     - sme-network
 

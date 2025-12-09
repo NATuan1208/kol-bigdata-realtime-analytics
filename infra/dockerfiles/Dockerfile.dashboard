@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements/dashboard.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy dashboard code
+COPY serving/dashboard /app/dashboard
+
+# Expose Streamlit port
+EXPOSE 8501
+
+# Configure Streamlit
+RUN mkdir -p /root/.streamlit
+RUN echo "\
+[server]\n\
+headless = true\n\
+address = \"0.0.0.0\"\n\
+port = 8501\n\
+enableCORS = false\n\
+enableXsrfProtection = false\n\
+" > /root/.streamlit/config.toml
+
+# Run Streamlit
+CMD ["streamlit", "run", "dashboard/app.py"]

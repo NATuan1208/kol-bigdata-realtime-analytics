@@ -9,10 +9,14 @@
     3. Start parallel scrapers (discovery + workers + refresh)
     
     Sau khi chạy, hệ thống sẽ:
-    - Tự động discovery KOL mới
+    - Tự động discovery KOL mới (CHỈ PUSH TOP N LÊN KAFKA)
     - Scrape video stats, comments, products
     - Tính trending score real-time
     - Re-fresh tracked KOLs mỗi 5 phút để tính velocity
+    
+    ⚠️ Limit Control:
+    Discovery tìm 20-30 KOLs nhưng chỉ push TOP N (default 20) lên Kafka
+    → Workers chỉ scrape TOP N KOLs → Kiểm soát volume và thời gian
 
 .EXAMPLE
     .\scripts\start_full_platform.ps1

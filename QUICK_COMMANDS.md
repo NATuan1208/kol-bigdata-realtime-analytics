@@ -33,6 +33,30 @@ make down-kol     # Stop KOL (SME Pulse keeps running)
 
 ---
 
+## 🎬 YouTube Scraper - Docker (100% Automated)
+
+### 🚀 Start YouTube Container (No Terminal Needed!)
+
+```bash
+cd infra
+docker-compose -f docker-compose.kol.yml up -d youtube-scraper
+docker logs -f youtube-scraper
+```
+
+Container tự động chạy 4 workers:
+- YouTube Discovery (Selenium) - mỗi 2 tiếng
+- YouTube Stats Worker (API) - lấy stats
+- YouTube Comments Worker (API) - lấy comments
+- Metrics Refresh - tính velocity mỗi 5 phút
+
+**Config:** Edit `MAX_CHANNELS`, `MAX_VIDEOS` in `docker-compose.kol.yml`
+
+**Monitor:** `docker logs -f youtube-scraper`
+
+**Stop:** `docker-compose -f docker-compose.kol.yml stop youtube-scraper`
+
+---
+
 ## 🕷️ TikTok Scraper - Parallel Workers (Recommended)
 
 ### 🚀 One-Click Start: Full Platform
@@ -55,7 +79,7 @@ Script sẽ:
 ### 🔄 Khởi chạy 5 Workers Song Song
 ```powershell
 # Khởi chạy workers:
-# - Discovery Scraper (Default profile) - Tìm KOL mới → push kol.discovery.raw
+# - Discovery Scraper (Default profile) - Tìm KOL mới → push TOP N lên kol.discovery.raw
 # - Metrics Refresh - Re-push tracked KOLs để tính velocity
 # - Video Stats Worker (Profile 1) - Lấy profile + videos
 # - Comment Extractor (Profile 1) - Extract comments
@@ -70,14 +94,17 @@ Script sẽ:
     -DiscoveryInterval 7200 `  # 2 tiếng tìm KOL mới
     -RefreshInterval 300       # 5 phút tính velocity
 
+# ⚠️ -MaxKols 10 = Discovery tìm 30 KOLs nhưng CHỈ PUSH TOP 10 LÊN KAFKA!
+# → Workers chỉ nhận 10 messages, chỉ scrape 10 KOLs → Kiểm soát được volume
+
 # Không chạy Metrics Refresh
 .\scripts\start_parallel_scrapers.ps1 -NoRefresh
 ```
 
 ### Chạy từng worker riêng (5 terminals)
 ```powershell
-# Terminal 1: Discovery scraper (tìm username mới) - chạy mỗi 2 tiếng
-py -m ingestion.sources.kol_scraper daemon --discovery-only --interval 7200
+# Terminal 1: Discovery scraper (tìm username mới) - CHỈ PUSH TOP 5 LÊN KAFKA
+py -m ingestion.sources.kol_scraper daemon --discovery-only --max-kols-per-round 5 --interval 7200
 
 # Terminal 2: Metrics Refresh (tính velocity) - chạy mỗi 5 phút
 py -m ingestion.sources.metrics_refresh --interval 300
@@ -90,6 +117,9 @@ py -m ingestion.consumers.comment_extractor --max-comments 50 --start-delay 240
 
 # Terminal 5: Product Extractor (lấy products từ TikTok Shop) - delay 240s
 py -m ingestion.consumers.product_extractor --max-videos 20 --start-delay 240
+
+# ⚠️ --max-kols-per-round 5 = Discovery có thể tìm 20-30 KOLs
+# nhưng CHỈ PUSH TOP 5 lên Kafka → Workers CHỈ scrape 5 KOLs!
 ```
 
 ### ⚙️ Intervals và Delays
@@ -155,8 +185,8 @@ docker exec -it kol-spark-master spark-submit `
 # Daemon mode - chạy liên tục (discovery + profile + videos)
 .\.venv\Scripts\python.exe -m ingestion.sources.kol_scraper daemon
 
-# Chỉ discovery (dùng với parallel workers)
-.\.venv\Scripts\python.exe -m ingestion.sources.kol_scraper daemon --discovery-only
+# Chỉ discovery (dùng với parallel workers) - CHỈ PUSH TOP N LÊN KAFKA
+.\.venv\Scripts\python.exe -m ingestion.sources.kol_scraper daemon --discovery-only --max-kols-per-round 5
 
 # Chạy 1 lần từng mode
 .\.venv\Scripts\python.exe -m ingestion.sources.kol_scraper discovery
@@ -168,7 +198,7 @@ docker exec -it kol-spark-master spark-submit `
 # Custom interval (mặc định 300s = 5 phút)
 .\.venv\Scripts\python.exe -m ingestion.sources.kol_scraper daemon --interval 600
 
-# Giới hạn số KOL mỗi vòng
+# Giới hạn số KOL mỗi vòng (CHỈ PUSH TOP N LÊN KAFKA)
 .\.venv\Scripts\python.exe -m ingestion.sources.kol_scraper daemon --max-kols-per-round 10
 
 # Full options
@@ -177,6 +207,9 @@ docker exec -it kol-spark-master spark-submit `
     --max-kols-per-round 20 `
     --discovery-only `
     --kafka-broker localhost:19092
+
+# ⚠️ QUAN TRỌNG: --max-kols-per-round giới hạn SỐ MESSAGES PUSH LÊN KAFKA
+# Discovery có thể tìm 30 KOLs nhưng chỉ push TOP 20 lên → Workers chỉ scrape 20!
 ```
 
 ---
@@ -305,6 +338,8 @@ docker exec kol-spark-master rm -rf /tmp/kafka-trending-checkpoint
 ### Run Trending Stream Job
 ```powershell
 # Submit trending job (background)
+docker exec kol-spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.driver.host=spark-master /opt/spark-jobs/kafka_trending_stream.py
+
 docker exec -d kol-spark-master /opt/spark/bin/spark-submit `
     --master spark://spark-master:7077 `
     --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 `

@@ -1,0 +1,9 @@
+# YouTube API Dependencies
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# Additional dependencies
+redis>=5.0.0
+loguru>=0.7.0

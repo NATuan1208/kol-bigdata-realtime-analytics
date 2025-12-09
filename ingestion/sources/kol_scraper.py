@@ -1109,7 +1109,7 @@ class KOLScraper:
     
     # ==================== FULL PIPELINE ====================
     
-    def run_discovery(self, niches: List[str], mode: str = "hybrid"):
+    def run_discovery(self, niches: List[str], mode: str = "hybrid", limit: Optional[int] = None):
         """Run discovery mode"""
         self.round_number += 1
         print(f"\n{'─'*50}")
@@ -1142,9 +1142,16 @@ class KOLScraper:
         if mode in ["trending", "hybrid"] and not is_interrupted():
             discoveries.extend(self.discover_from_fyp())
         
-        # Push to Kafka
-        print(f"\n   📤 Pushing {len(discoveries)} discoveries...")
-        for d in discoveries:
+        # Giới hạn số lượng discoveries trước khi push Kafka
+        if limit:
+            discoveries_to_push = discoveries[:limit]
+            print(f"\n   📤 Pushing TOP {len(discoveries_to_push)}/{len(discoveries)} discoveries...")
+        else:
+            discoveries_to_push = discoveries
+            print(f"\n   📤 Pushing {len(discoveries_to_push)} discoveries...")
+        
+        # Push to Kafka - CHỈ PUSH TOP N!
+        for d in discoveries_to_push:
             self.push_to_kafka("discovery", d.username, asdict(d))
         
         self.kafka.flush()
@@ -1343,8 +1350,8 @@ def main():
         elif args.command == "full":
             niches = [n.strip() for n in args.niche.split(",")]
             
-            # Discovery
-            discoveries = scraper.run_discovery(niches, args.mode)
+            # Discovery - CHỈ push TOP N lên Kafka
+            discoveries = scraper.run_discovery(niches, args.mode, limit=args.max_kols)
             
             # Scrape top KOLs
             for i, d in enumerate(discoveries[:args.max_kols]):
@@ -1395,8 +1402,8 @@ def main():
                 print(f"{'━'*60}")
                 
                 try:
-                    # Discovery
-                    discoveries = scraper.run_discovery(niches, args.mode)
+                    # Discovery - CHỈ push TOP N lên Kafka
+                    discoveries = scraper.run_discovery(niches, args.mode, limit=args.max_kols_per_round)
                     
                     # Skip scraping if discovery-only mode (consumers will handle)
                     if not discovery_only:
