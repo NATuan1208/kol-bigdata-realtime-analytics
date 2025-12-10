@@ -158,8 +158,8 @@ A production-grade **KOL (Key Opinion Leader) Analytics Platform** featuring rea
 │  │  │                  MLFLOW (Port 5000)                         │   │    │
 │  │  │                                                             │   │    │
 │  │  │  Model Registry:                                            │   │    │
-│  │  │  • Trust Score Model (XGBoost) - Accuracy: 94.2%           │   │    │
-│  │  │  • Success Score Model (XGBoost) - MAE: 8.3                │   │    │
+│  │  │  • Trust Score Model (LightGBM ensemble) - Accuracy: 94.2%           │   │    │
+│  │  │  • Success Score Model (LightGBM) - MAE: 8.3                │   │    │
 │  │  │                                                             │   │    │
 │  │  │  Artifacts Location: s3://kol-mlflow/                      │   │    │
 │  │  │  Local Fallback: models/artifacts/*.pkl                    │   │    │
@@ -459,18 +459,21 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/predict/batch" `
 | **20-39** | 🔴 Low Trust | High | High fraud risk - not recommended | Blacklist consideration |
 | **0-19** | ⛔ Untrusted | Critical | Automatic block from platform | Confirmed fraud/bots |
 
-**Trust Score Formula:**
+**Trust Score Formula (LightGBM Optuna):**
 ```python
-trust_score = XGBoost_predict(
-    follower_authenticity,    # Bot detection signals
-    engagement_consistency,   # Stable vs. spiky patterns  
-    content_quality,          # Video production value
-    audience_demographics,    # Real users distribution
-    historical_performance,   # Past campaign results
-    platform_verification,    # Blue checkmark status
-    account_age,              # Maturity indicator
-    posting_regularity        # Content schedule consistency
+trust_score = LightGBM_predict(
+    log_followers,                       # Logarithm of follower count (156K importance - most critical)
+    engagement_rate,                     # Avg engagement rate (50K importance)
+    followers_per_day,                   # Growth velocity (47K importance)
+    log_account_age,                     # Account maturity (45K importance)
+    log_favorites,                       # Total likes received (42K importance)
+    profile_engagement_interaction,      # Cross-metric interaction (27K importance)
+    log_following,                       # Following count log (27K importance)
+    posts_per_follower,                  # Content density (22K importance)
+    # ... 22 more features (total: 30 features)
 )
+# Model: lgbm_optuna_model.pkl (trained Nov 27, 2025)
+# Training: 50 Optuna trials, 5-fold CV, best trial #35
 ```
 
 #### Success Score Labels  
@@ -509,26 +512,44 @@ def calculate_trending_score(current_window, previous_window):
 
 ### Model Performance Metrics
 
-| Model | Dataset Size | Accuracy | Precision | Recall | F1-Score | AUC-ROC |
-|-------|--------------|----------|-----------|--------|----------|---------|
-| **Trust Score** | 125,266 samples | **94.2%** | 0.93 | 0.91 | 0.92 | 0.97 |
-| **Success Score** | 86,311 campaigns | - | - | - | MAE: 8.3 | R²: 0.86 |
+| Model | Algorithm | Dataset Size | Accuracy | Precision | Recall | F1-Score | AUC-ROC |
+|-------|-----------|--------------|----------|-----------|--------|----------|---------|
+| **Trust Score** | LightGBM-Optuna | 125,266 samples | **88.4%** | 0.861 | 0.775 | 0.816 | **0.9423** |
+| **Success Score** | LightGBM Binary | 86,311 campaigns | 76.8% | 0.571 | 0.235 | 0.333 | 0.589 |
+| **Ensemble (Staging)** | XGB+LGBM+IForest | 125,266 samples | **88.1%** | 0.826 | 0.813 | 0.819 | **0.940** |
+
+**Trust Score - Top Features (by LightGBM importance):**
+1. **log_followers** (156K) - Account size indicator
+2. **engagement_rate** (50K) - Audience interaction quality
+3. **followers_per_day** (47K) - Growth velocity
+4. **log_account_age** (45K) - Account maturity
+5. **log_favorites** (42K) - Content popularity
 
 **Key Performance Indicators:**
 - **Inference Time**: 12ms average (p95: 18ms)
-- **Model Size**: Trust (24MB), Success (18MB)
-- **Training Data**: Updated monthly with new campaigns
-- **A/B Test Results**: 23% improvement in campaign ROI vs. manual selection
+- **Model Size**: Trust (1.2MB LightGBM), Success (0.8MB)
+- **Training Method**: 50 Optuna trials, 5-fold CV (best trial #35)
+- **Production Model**: `lgbm_optuna_model.pkl` (trained Nov 27, 2025)
+- **Staging Model**: Ensemble stacking (XGB weight: 6.79, LGBM: 1.18, IForest: -0.38)
 
-### Feature Engineering (28 Features)
+### Feature Engineering (30 Features)
 
-| Category | Features | Importance |
-|----------|----------|------------|
-| **Engagement** | likes, comments, shares, saves, avg_engagement_rate | 🔴 High (35%) |
-| **Audience** | follower_count, follower_growth_rate, demographics_diversity | 🟠 Medium (25%) |
-| **Content** | video_count, posting_frequency, content_consistency, niche_focus | 🟡 Medium (20%) |
-| **Temporal** | account_age, active_days, peak_posting_times | 🟢 Low (10%) |
-| **Network** | following_count, follower_following_ratio, collaboration_count | 🔵 Low (10%) |
+**Feature Categories (Based on LightGBM Optuna Model):**
+
+| Category | Features | Top Feature Importance |
+|----------|----------|------------------------|
+| **Scale Features (Log)** | log_followers, log_account_age, log_favorites, log_following, log_videos, log_likes | 🔴 Critical (156K - 42K) |
+| **Engagement Metrics** | engagement_rate, profile_engagement_interaction, posts_per_follower | 🟠 High (50K - 22K) |
+| **Growth Indicators** | followers_per_day, following_per_day, videos_per_day, likes_per_day | 🟡 Medium (47K - 15K) |
+| **Ratios** | follower_following_ratio, engagement_per_video, favorites_per_follower | 🟢 Medium (20K - 12K) |
+| **Temporal** | account_age_days, days_since_last_post, posting_regularity | 🔵 Low (10K - 5K) |
+
+**Engineering Techniques:**
+- **Log Transformation**: Applied to all count features (followers, videos, likes) to handle skewed distributions
+- **Interaction Features**: `profile_engagement_interaction` = engagement_rate × log_followers
+- **Velocity Features**: Growth per day metrics (followers_per_day, videos_per_day)
+- **Ratio Features**: Normalized metrics (posts_per_follower, favorites_per_follower)
+- **StandardScaler**: Applied to all features before model training
 
 ---
 
@@ -566,8 +587,13 @@ kol-platform/
 │   ├── ML_PIPELINE.md                 # Model training & evaluation
 │   ├── DOMAIN_SEPARATION.md           # Hot/Cold path decisions
 │   ├── MLFLOW_MODEL_SERVING.md        # MLflow setup guide
-│   ├── NEXT_PHASE_PLAN.md             # Roadmap & future work
-│   └── guides/                        # Step-by-step tutorials
+│   ├── guides/                        # Step-by-step tutorials
+│   ├── ingestion_guide/               # Data ingestion documentation
+│   ├── Intergration/                  # Integration patterns
+│   └── Hot path/                      # Real-time streaming docs
+│       ├── UNIFIED_HOT_PATH.md        # Hot path architecture
+│       ├── QUICK_COMMANDS.md          # Command reference
+│       └── PROJECT_PROGRESS_REPORT.md # Development progress
 │
 ├── 📂 dwh/                            # Data Warehouse
 │   ├── infra/                         # Infrastructure as Code
@@ -595,9 +621,14 @@ kol-platform/
 │
 ├── 📂 models/                         # ML Models & Artifacts
 │   ├── artifacts/                     # Saved model files
-│   │   ├── trust_model_xgb.pkl        # ⭐ Trust Score (XGBoost 24MB)
-│   │   ├── success_model_xgb.pkl      # ⭐ Success Score (XGBoost 18MB)
-│   │   └── scaler_trust.pkl           # Feature scaler
+│   │   ├── trust/                     # Trust Score models
+│   │   │   ├── lgbm_optuna_model.pkl  # ⭐ Production LightGBM (Optuna-tuned)
+│   │   │   ├── ensemble_trust_score_latest_meta.joblib  # Staging Ensemble
+│   │   │   ├── xgb_trust_classifier_latest.joblib       # XGBoost baseline
+│   │   │   └── iforest_trust_anomaly_latest.joblib      # Anomaly detection
+│   │   └── success/                   # Success Score models
+│   │       ├── success_lgbm_model.pkl # ⭐ LightGBM regressor
+│   │       └── success_scaler.pkl     # Feature scaler
 │   ├── registry/                      # MLflow registry metadata
 │   ├── nlp/                           # NLP models (future: PhoBERT)
 │   ├── reports/                       # Model evaluation reports
@@ -665,8 +696,6 @@ kol-platform/
 │   └── trainer-full.txt               # ML training stack
 │
 ├── 📄 README.md                       # ⭐ This file (comprehensive docs)
-├── 📄 QUICKSTART.md                   # Quick setup guide
-├── 📄 QUICK_COMMANDS.md               # Command cheat sheet
 ├── 📄 Makefile                        # Build automation
 ├── 📄 pytest.ini                      # Test configuration
 ├── 📄 temp_spark.json                 # Spark temp config
@@ -675,8 +704,8 @@ kol-platform/
 
 **File Count Summary:**
 - **Python Files**: 156+
-- **Documentation**: 12 MD files
-- **Docker Files**: 7 containers
+- **Documentation**: 8+ MD files (README + docs/)
+- **Docker Containers**: 7 services
 - **Total Lines of Code**: ~45,000 LOC
 
 ---
@@ -1242,9 +1271,8 @@ Write-Host "`n🎉 Hot Path E2E Test Complete!" -ForegroundColor Green
 - **[ML Pipeline Guide](docs/ML_PIPELINE.md)** - Model training, evaluation, and deployment best practices
 - **[Domain Separation](docs/DOMAIN_SEPARATION.md)** - Hot Path vs Cold Path design decisions
 - **[MLflow Model Serving](docs/MLFLOW_MODEL_SERVING.md)** - Model registry setup and hybrid loading
-- **[Next Phase Plan](docs/NEXT_PHASE_PLAN.md)** - Detailed roadmap with timelines
-- **[Quick Commands](QUICK_COMMANDS.md)** - Command cheat sheet for common operations
-- **[Quick Start](QUICKSTART.md)** - Step-by-step setup guide
+- **[Hot Path Guide](docs/Hot%20path/UNIFIED_HOT_PATH.md)** - Real-time streaming pipeline documentation
+- **[Quick Commands](docs/Hot%20path/QUICK_COMMANDS.md)** - Command cheat sheet for common operations
 
 ### External Links
 
@@ -1339,8 +1367,11 @@ def calculate_trust_score(
 
 - **NATuan1208** - Lead Data Engineer & MLOps Architect
   - GitHub: [@NATuan1208](https://github.com/NATuan1208)
-  - Email: [Your Email]
-  - LinkedIn: [Your LinkedIn]
+  - Email: tuancuoi2703@gmail.com
+  - Role: ML Pipeline, Batch ETL, API Development, Model Training
+
+- **TienPhan** - Streaming Process & Hot Path Engineer
+  - Role: Spark Streaming, Kafka Integration, Real-time Pipeline, Trending Score Algorithm
 
 ### Special Thanks
 
@@ -1392,7 +1423,7 @@ SOFTWARE.
 - **GitHub Issues**: [Report bugs or request features](https://github.com/NATuan1208/kol-bigdata-realtime-analytics/issues)
 - **GitHub Discussions**: [Ask questions or share ideas](https://github.com/NATuan1208/kol-bigdata-realtime-analytics/discussions)
 - **Documentation**: [Full docs](docs/)
-- **Email**: [Your Support Email]
+- **Email**: tuancuoi2703@gmail.com
 
 ### Reporting Issues
 
