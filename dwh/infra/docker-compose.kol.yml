@@ -408,8 +408,8 @@ services:
   # ==========================================================================
   api:
     build:
-      context: ../
-      dockerfile: ./infra/dockerfiles/Dockerfile.api
+      context: ../../
+      dockerfile: ./dwh/infra/dockerfiles/Dockerfile.api
     container_name: kol-api
     hostname: api
     environment:
@@ -423,7 +423,11 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       CASSANDRA_HOST: cassandra
       CASSANDRA_PORT: 9042
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379/0
+      TRINO_HOST: sme-trino
+      TRINO_PORT: 8080
       
       # MLflow model registry
       MLFLOW_TRACKING_URI: http://mlflow:5000

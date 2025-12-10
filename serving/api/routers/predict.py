@@ -24,7 +24,16 @@ import numpy as np
 router = APIRouter()
 
 # Project root - works from any working directory
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.resolve()
+# In Docker: /app is the root, so we need to detect Docker environment
+def _get_project_root():
+    """Get project root, handling both local and Docker environments."""
+    # Check if running in Docker (PYTHONPATH=/app)
+    if os.getenv("PYTHONPATH") == "/app":
+        return Path("/app")
+    # Local development - traverse from file location
+    return Path(__file__).parent.parent.parent.parent.resolve()
+
+PROJECT_ROOT = _get_project_root()
 
 # ============================================================================
 # CONFIGURATION

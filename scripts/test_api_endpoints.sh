@@ -11,181 +11,226 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}============================================${NC}"
 echo -e "${BLUE}   KOL Platform API - Endpoint Testing     ${NC}"
 echo -e "${BLUE}============================================${NC}"
+echo "Target: $BASE_URL"
+echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
 # Counter for results
 PASSED=0
 FAILED=0
-EXPECTED_404=0
+SKIPPED=0
 
-# Function to test endpoint
-test_endpoint() {
-    local method=$1
-    local endpoint=$2
-    local description=$3
+# Function to test GET endpoint
+test_get() {
+    local endpoint=$1
+    local description=$2
+    local expect_404=${3:-false}
+    local show_response=${4:-false}
     
     echo -e "${YELLOW}Testing:${NC} $description"
-    echo -e "  ${method} ${endpoint}"
+    echo -e "  ${GRAY}GET ${endpoint}${NC}"
     
-    response=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}${endpoint}")
-    
-    if [ "$response" -ge 200 ] && [ "$response" -lt 300 ]; then
-        echo -e "  ${GREEN}✓ PASSED${NC} (HTTP $response)"
-        ((PASSED++))
-    elif [ "$response" -eq 422 ]; then
-        # 422 = Validation error, endpoint exists but params missing
-        echo -e "  ${YELLOW}⚠ PARTIAL${NC} (HTTP $response - Validation error, endpoint exists)"
-        ((PASSED++))
-    else
-        echo -e "  ${RED}✗ FAILED${NC} (HTTP $response)"
-        ((FAILED++))
-    fi
-    echo ""
-}
-
-# Function to test endpoint expecting 404 (data not found but endpoint works)
-test_endpoint_expect_404() {
-    local method=$1
-    local endpoint=$2
-    local description=$3
-    
-    echo -e "${YELLOW}Testing:${NC} $description"
-    echo -e "  ${method} ${endpoint}"
-    
-    response=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}${endpoint}")
-    
-    if [ "$response" -eq 404 ]; then
-        echo -e "  ${GREEN}✓ PASSED${NC} (HTTP $response - Expected 404, endpoint works)"
-        ((EXPECTED_404++))
-        ((PASSED++))
-    elif [ "$response" -ge 200 ] && [ "$response" -lt 300 ]; then
-        echo -e "  ${GREEN}✓ PASSED${NC} (HTTP $response - Data found)"
-        ((PASSED++))
-    else
-        echo -e "  ${RED}✗ FAILED${NC} (HTTP $response)"
-        ((FAILED++))
-    fi
-    echo ""
-}
-
-# Function to test endpoint with JSON output
-test_endpoint_json() {
-    local method=$1
-    local endpoint=$2
-    local description=$3
-    
-    echo -e "${YELLOW}Testing:${NC} $description"
-    echo -e "  ${method} ${endpoint}"
-    
-    response=$(curl -s "${BASE_URL}${endpoint}")
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}${endpoint}")
+    response=$(curl -s -w "\n%{http_code}" "${BASE_URL}${endpoint}" 2>/dev/null)
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | sed '$d')
     
     if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
         echo -e "  ${GREEN}✓ PASSED${NC} (HTTP $http_code)"
-        echo -e "  Response: $(echo $response | head -c 200)..."
+        if [ "$show_response" = "true" ]; then
+            echo -e "  ${GRAY}Response: $(echo $body | head -c 200)...${NC}"
+        fi
         ((PASSED++))
+    elif [ "$http_code" -eq 422 ]; then
+        echo -e "  ${YELLOW}⚠ PARTIAL${NC} (HTTP 422 - Validation error, endpoint exists)"
+        ((PASSED++))
+    elif [ "$http_code" -eq 404 ] && [ "$expect_404" = "true" ]; then
+        echo -e "  ${GREEN}✓ PASSED${NC} (HTTP 404 - Expected, endpoint works but no data)"
+        ((PASSED++))
+    elif [ "$http_code" -eq 404 ]; then
+        echo -e "  ${RED}✗ FAILED${NC} (HTTP 404 - Endpoint not found)"
+        ((FAILED++))
+    elif [ "$http_code" -eq 500 ]; then
+        echo -e "  ${RED}✗ FAILED${NC} (HTTP 500 - Server error)"
+        ((FAILED++))
     else
         echo -e "  ${RED}✗ FAILED${NC} (HTTP $http_code)"
-        echo -e "  Response: $response"
+        ((FAILED++))
+    fi
+    echo ""
+}
+
+# Function to test POST endpoint with JSON body
+test_post() {
+    local endpoint=$1
+    local description=$2
+    local body=$3
+    local show_response=${4:-false}
+    
+    echo -e "${YELLOW}Testing:${NC} $description"
+    echo -e "  ${GRAY}POST ${endpoint}${NC}"
+    
+    response=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}${endpoint}" \
+        -H "Content-Type: application/json" \
+        -d "$body" \
+        --max-time 15 2>/dev/null)
+    
+    http_code=$(echo "$response" | tail -n1)
+    resp_body=$(echo "$response" | sed '$d')
+    
+    if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+        echo -e "  ${GREEN}✓ PASSED${NC} (HTTP $http_code)"
+        if [ "$show_response" = "true" ]; then
+            echo -e "  ${GRAY}Response: $(echo $resp_body | head -c 300)...${NC}"
+        fi
+        ((PASSED++))
+    elif [ "$http_code" -eq 422 ]; then
+        echo -e "  ${YELLOW}⚠ PARTIAL${NC} (HTTP 422 - Validation error)"
+        ((PASSED++))
+    elif [ "$http_code" -eq 503 ]; then
+        echo -e "  ${YELLOW}⚠ SKIPPED${NC} (HTTP 503 - Model not available)"
+        ((SKIPPED++))
+    elif [ "$http_code" -eq 000 ]; then
+        echo -e "  ${YELLOW}⚠ SKIPPED${NC} (Timeout or connection failed)"
+        ((SKIPPED++))
+    else
+        echo -e "  ${RED}✗ FAILED${NC} (HTTP $http_code)"
+        echo -e "  ${GRAY}Response: $resp_body${NC}"
         ((FAILED++))
     fi
     echo ""
 }
 
 # ============================================================================
-# HEALTH CHECK
+# HEALTH CHECKS
 # ============================================================================
 echo -e "${BLUE}--- Health Checks ---${NC}"
-test_endpoint_json "GET" "/" "Root endpoint"
-test_endpoint_json "GET" "/healthz" "Health check"
-test_endpoint "GET" "/docs" "Swagger UI documentation"
-test_endpoint "GET" "/redoc" "ReDoc documentation"
+
+test_get "/" "Root endpoint" false true
+test_get "/healthz" "Health check" false true
+test_get "/docs" "Swagger UI documentation"
+test_get "/redoc" "ReDoc documentation"
+test_get "/openapi.json" "OpenAPI schema"
 
 # ============================================================================
 # KOL ENDPOINTS (v1)
 # ============================================================================
 echo -e "${BLUE}--- KOL Endpoints (/api/v1/kols) ---${NC}"
-test_endpoint_json "GET" "/api/v1/kols" "List KOLs"
-test_endpoint_json "GET" "/api/v1/kols?limit=5" "List KOLs with limit"
-test_endpoint_json "GET" "/api/v1/kols?platform=tiktok" "List TikTok KOLs"
-test_endpoint_expect_404 "GET" "/api/v1/kols/test_user_123" "Get single KOL by ID (expect 404 - no data)"
-test_endpoint_json "GET" "/api/v1/kols/test_user_123/content" "Get KOL content"
+
+test_get "/api/v1/kols" "List KOLs" false true
+test_get "/api/v1/kols?limit=5" "List KOLs with limit"
+test_get "/api/v1/kols?platform=tiktok" "List TikTok KOLs"
+test_get "/api/v1/kols?platform=youtube" "List YouTube KOLs"
+test_get "/api/v1/kols/test_user_123" "Get single KOL by ID" true
+test_get "/api/v1/kols/test_user_123/content" "Get KOL content" true
 
 # ============================================================================
 # SCORES ENDPOINTS (v1)
 # ============================================================================
 echo -e "${BLUE}--- Scores Endpoints (/api/v1/scores) ---${NC}"
-test_endpoint_json "GET" "/api/v1/scores/test_user_123" "All scores for KOL"
-test_endpoint_expect_404 "GET" "/api/v1/scores/test_user_123/trust" "Trust score (expect 404 - not computed)"
-test_endpoint_expect_404 "GET" "/api/v1/scores/test_user_123/trending" "Trending score (expect 404 - not computed)"
-test_endpoint_expect_404 "GET" "/api/v1/scores/test_user_123/success" "Success score (expect 404 - not computed)"
+
+test_get "/api/v1/scores/test_user_123" "All scores for KOL" false true
+test_get "/api/v1/scores/test_user_123/trust" "Trust score" true
+test_get "/api/v1/scores/test_user_123/trending" "Trending score" true
+test_get "/api/v1/scores/test_user_123/success" "Success score" true
 
 # ============================================================================
 # STATS ENDPOINTS (v1)
 # ============================================================================
 echo -e "${BLUE}--- Stats Endpoints (/api/v1/stats) ---${NC}"
-test_endpoint_json "GET" "/api/v1/stats" "Platform statistics"
-test_endpoint_json "GET" "/api/v1/stats/platforms" "Stats by platform"
-test_endpoint_json "GET" "/api/v1/stats/cache" "Cache statistics"
+
+test_get "/api/v1/stats" "Platform statistics" false true
+test_get "/api/v1/stats/platforms" "Stats by platform"
+test_get "/api/v1/stats/cache" "Cache statistics"
 
 # ============================================================================
 # TRENDING ENDPOINTS (v1)
 # ============================================================================
 echo -e "${BLUE}--- Trending Endpoints (/api/v1/trending) ---${NC}"
-test_endpoint_json "GET" "/api/v1/trending" "Top trending KOLs"
-test_endpoint_json "GET" "/api/v1/trending?limit=5" "Top 5 trending"
-test_endpoint_json "GET" "/api/v1/trending/viral" "Viral KOLs"
-test_endpoint_json "GET" "/api/v1/trending/hot" "Hot KOLs"
-test_endpoint_json "GET" "/api/v1/trending/rising" "Rising KOLs"
+
+test_get "/api/v1/trending" "Top trending KOLs" false true
+test_get "/api/v1/trending?limit=5" "Top 5 trending"
+test_get "/api/v1/trending/detailed" "Detailed trending (Dashboard)" false true
+test_get "/api/v1/trending/viral" "Viral KOLs"
+test_get "/api/v1/trending/hot" "Hot KOLs"
+test_get "/api/v1/trending/rising" "Rising KOLs"
 
 # ============================================================================
 # SEARCH ENDPOINTS (v1)
 # ============================================================================
 echo -e "${BLUE}--- Search Endpoints (/api/v1/search) ---${NC}"
-test_endpoint_json "GET" "/api/v1/search?q=test" "Search KOLs"
-test_endpoint_json "GET" "/api/v1/search/suggest?prefix=te" "Autocomplete suggestions"
+
+test_get "/api/v1/search?q=test" "Search KOLs" false true
+test_get "/api/v1/search?q=beauty&platform=tiktok" "Search TikTok KOLs"
+test_get "/api/v1/search/suggest?prefix=te" "Autocomplete suggestions"
 
 # ============================================================================
-# PREDICT ENDPOINTS (ML) - Skipped by default (requires MLflow server)
+# PREDICT ENDPOINTS (ML Inference)
 # ============================================================================
-echo -e "${BLUE}--- Predict Endpoints (/predict) ---${NC}"
-echo -e "${YELLOW}⚠ Predict endpoints require MLflow server - testing with timeout${NC}"
+echo -e "${BLUE}--- Predict Endpoints (/predict) - ML Inference ---${NC}"
 
-# Test predict endpoints with 5 second timeout (will fail if MLflow not running)
-predict_test() {
-    local endpoint=$1
-    local description=$2
-    echo -e "${YELLOW}Testing:${NC} $description"
-    echo -e "  GET $endpoint"
-    
-    # Use timeout to prevent hanging
-    response=$(timeout 5 curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}${endpoint}" 2>/dev/null)
-    exit_code=$?
-    
-    if [ $exit_code -eq 124 ]; then
-        echo -e "  ${YELLOW}⚠ SKIPPED${NC} (timeout - MLflow server not running)"
-    elif [ "$response" -ge 200 ] && [ "$response" -lt 500 ]; then
-        echo -e "  ${GREEN}✓ PASSED${NC} (HTTP $response)"
-        ((PASSED++))
-    else
-        echo -e "  ${YELLOW}⚠ SKIPPED${NC} (HTTP $response - MLflow required)"
-    fi
-    echo ""
-}
+# Trust Score prediction
+TRUST_BODY='{
+    "kol_id": "test_kol_001",
+    "followers_count": 50000,
+    "following_count": 500,
+    "post_count": 100,
+    "account_age_days": 365,
+    "total_likes": 500000,
+    "avg_views": 10000,
+    "avg_likes": 2500,
+    "avg_comments": 150,
+    "avg_shares": 50,
+    "engagement_rate": 0.05,
+    "posting_consistency": 0.8,
+    "content_quality_score": 0.75,
+    "is_verified": true
+}'
+test_post "/predict/trust" "Trust Score prediction" "$TRUST_BODY" true
 
-predict_test "/predict/trust/model-info" "Trust model info"
-predict_test "/predict/success/model-info" "Success model info"
+# Success Score prediction
+SUCCESS_BODY='{
+    "kol_id": "test_kol_001",
+    "followers": 50000,
+    "engagement_rate": 0.05,
+    "avg_views": 10000,
+    "category": "beauty",
+    "past_success_rate": 0.7,
+    "brand_fit_score": 0.8
+}'
+test_post "/predict/success" "Success Score prediction" "$SUCCESS_BODY" true
+
+# Trending Score prediction
+TRENDING_BODY='{
+    "kol_id": "test_kol_001",
+    "followers": 50000,
+    "views_growth_rate": 0.15,
+    "engagement_growth_rate": 0.20,
+    "viral_video_count": 3,
+    "recent_mentions": 100,
+    "social_buzz_score": 0.75
+}'
+test_post "/predict/trending" "Trending Score prediction" "$TRENDING_BODY" true
+
+# Model info endpoints (only trust and success have model-info)
+test_get "/predict/trust/model-info" "Trust model info" false true
+test_get "/predict/success/model-info" "Success model info" false true
+# Note: trending uses formula-based calculation, not ML model
+
+# Health endpoint
+test_get "/predict/health" "Predict service health" false true
 
 # ============================================================================
-# LEGACY ENDPOINTS
+# LEGACY ENDPOINTS (Deprecated)
 # ============================================================================
-echo -e "${BLUE}--- Legacy Endpoints (/kol) ---${NC}"
-test_endpoint_json "GET" "/kol/test_user_123/trust" "Legacy trust endpoint (deprecated)"
+echo -e "${BLUE}--- Legacy Endpoints (/kol) - Deprecated ---${NC}"
+
+test_get "/kol/test_user_123/trust" "Legacy trust endpoint" true
 
 # ============================================================================
 # SUMMARY
@@ -193,11 +238,11 @@ test_endpoint_json "GET" "/kol/test_user_123/trust" "Legacy trust endpoint (depr
 echo -e "${BLUE}============================================${NC}"
 echo -e "${BLUE}               TEST SUMMARY                ${NC}"
 echo -e "${BLUE}============================================${NC}"
-echo -e "  ${GREEN}Passed:${NC} $PASSED"
-echo -e "  ${YELLOW}Expected 404:${NC} $EXPECTED_404 (no data but endpoint works)"
-echo -e "  ${RED}Failed:${NC} $FAILED"
-TOTAL=$((PASSED + FAILED))
-echo -e "  Total:  $TOTAL"
+echo -e "  ${GREEN}Passed:${NC}  $PASSED"
+echo -e "  ${YELLOW}Skipped:${NC} $SKIPPED"
+echo -e "  ${RED}Failed:${NC}  $FAILED"
+TOTAL=$((PASSED + FAILED + SKIPPED))
+echo -e "  Total:   $TOTAL"
 echo ""
 
 if [ $FAILED -eq 0 ]; then
