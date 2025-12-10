@@ -13,6 +13,7 @@ Usage by Streaming Layer:
 """
 
 import os
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -22,12 +23,41 @@ import numpy as np
 
 router = APIRouter()
 
+# Project root - works from any working directory
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.resolve()
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME_TRUST", "trust-score-lightgbm-optuna")
 MODEL_STAGE = os.getenv("MLFLOW_MODEL_STAGE", "Production")
+
+# Model loading strategy: "local_first" (fast) or "mlflow_first" (requires MLflow)
+MODEL_LOAD_STRATEGY = os.getenv("MODEL_LOAD_STRATEGY", "local_first")
+
+# Per-model loading strategy override (trust=mlflow, success=local)
+MODEL_STRATEGY_OVERRIDE = {
+    "trust": os.getenv("TRUST_MODEL_STRATEGY", "auto"),  # auto = try mlflow, fallback local
+    "success": "local",  # Always local (not registered in MLflow yet)
+}
+
+# Local model paths - absolute paths based on project root
+def _get_local_model_paths():
+    """Get absolute model paths that work from any working directory."""
+    return {
+        "trust": [
+            PROJECT_ROOT / "models" / "artifacts" / "trust" / "lgbm_optuna_model.pkl",
+            PROJECT_ROOT / "models" / "artifacts" / "trust" / "lgbm_trust_classifier_latest.joblib",
+            PROJECT_ROOT / "models" / "artifacts" / "trust" / "xgb_trust_classifier_latest.joblib",
+        ],
+        "success": [
+            PROJECT_ROOT / "models" / "artifacts" / "success" / "success_lgbm_model.pkl",
+            PROJECT_ROOT / "models" / "artifacts" / "success" / "success_lgbm_model_binary.pkl",
+        ]
+    }
+
+LOCAL_MODEL_PATHS = _get_local_model_paths()
 
 # Feature columns expected by the model
 FEATURE_COLUMNS = [
@@ -108,63 +138,161 @@ class BatchPredictionResponse(BaseModel):
 
 
 # ============================================================================
-# MODEL LOADING (Lazy loading with caching)
+# MODEL LOADING (Local-first strategy to avoid MLflow hanging)
 # ============================================================================
 _model_cache = {}
+_model_load_status = {"trust": None, "success": None}
 
-def get_model():
-    """Load model from MLflow registry (cached)."""
-    global _model_cache
+
+def _load_local_model(model_type: str = "trust"):
+    """Load model from local filesystem (fast, no network)."""
+    import joblib
     
-    cache_key = f"{MODEL_NAME}_{MODEL_STAGE}"
+    paths = LOCAL_MODEL_PATHS.get(model_type, [])
     
-    if cache_key not in _model_cache:
+    print(f"🔍 Searching for {model_type} model in {len(paths)} paths...")
+    
+    for path in paths:
+        try:
+            # Convert Path to string and check existence
+            path_str = str(path)
+            if Path(path).exists():
+                model = joblib.load(path_str)
+                print(f"✅ Loaded local {model_type} model: {path}")
+                return model, f"local:{Path(path).name}"
+            else:
+                print(f"   ❌ Not found: {path}")
+        except Exception as e:
+            print(f"⚠️ Failed to load {path}: {e}")
+            continue
+    
+    print(f"❌ No local model found for {model_type}")
+    return None, None
+
+
+def _load_mlflow_model_with_timeout(model_type: str = "trust", timeout: int = 5):
+    """
+    Try to load model from MLflow with timeout.
+    Returns (model, version) or (None, None) if failed/timeout.
+    """
+    import threading
+    import queue
+    
+    result_queue = queue.Queue()
+    
+    def _load():
         try:
             import mlflow
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
             
-            # Use pyfunc for generic model loading (works with sklearn, lightgbm, xgboost)
             model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
             loaded_model = mlflow.pyfunc.load_model(model_uri)
             
-            # Get the underlying sklearn/lightgbm model
-            _model_cache[cache_key] = loaded_model._model_impl.python_model.lgb_model
-            _model_cache[f"{cache_key}_version"] = f"{MODEL_NAME}-{MODEL_STAGE}"
-            print(f"✅ Loaded MLflow model: {model_uri}")
-        except Exception as e:
-            print(f"⚠️ MLflow pyfunc load failed: {e}")
-            # Try lightgbm flavor directly
+            # Try to get underlying model
             try:
-                import mlflow.lightgbm
-                model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
-                _model_cache[cache_key] = mlflow.lightgbm.load_model(model_uri)
-                _model_cache[f"{cache_key}_version"] = f"{MODEL_NAME}-{MODEL_STAGE}"
-                print(f"✅ Loaded MLflow LightGBM model: {model_uri}")
-            except Exception as e2:
-                print(f"⚠️ MLflow LightGBM load failed: {e2}")
-                # Try sklearn flavor
-                try:
-                    import mlflow.sklearn
-                    model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
-                    _model_cache[cache_key] = mlflow.sklearn.load_model(model_uri)
-                    _model_cache[f"{cache_key}_version"] = f"{MODEL_NAME}-{MODEL_STAGE}"
-                    print(f"✅ Loaded MLflow sklearn model: {model_uri}")
-                except Exception as e3:
-                    print(f"⚠️ MLflow sklearn load failed: {e3}")
-                    # Last fallback: load from local file
-                    try:
-                        import joblib
-                        model_path = "/app/models/artifacts/trust/lgbm_optuna_model.pkl"
-                        _model_cache[cache_key] = joblib.load(model_path)
-                        _model_cache[f"{cache_key}_version"] = "local-fallback"
-                        print(f"✅ Loaded fallback model from: {model_path}")
-                    except Exception as e4:
-                        raise HTTPException(
-                            status_code=503,
-                            detail=f"Model not available: {str(e4)}"
-                        )
+                model = loaded_model._model_impl.python_model.lgb_model
+            except:
+                model = loaded_model
+            
+            result_queue.put((model, f"mlflow:{MODEL_NAME}/{MODEL_STAGE}"))
+        except Exception as e:
+            result_queue.put((None, str(e)))
     
-    return _model_cache[cache_key], _model_cache.get(f"{cache_key}_version", "unknown")
+    thread = threading.Thread(target=_load)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout=timeout)
+    
+    if thread.is_alive():
+        print(f"⚠️ MLflow load timed out after {timeout}s")
+        return None, "timeout"
+    
+    try:
+        return result_queue.get_nowait()
+    except queue.Empty:
+        return None, "empty_result"
+
+
+def get_model(model_type: str = "trust"):
+    """
+    Load model with hybrid strategy.
+    
+    Strategy per model_type:
+    - trust: Try MLflow first (if TRUST_MODEL_STRATEGY=auto), fallback to local
+    - success: Always local (not in MLflow yet)
+    """
+    global _model_cache, _model_load_status
+    
+    cache_key = f"{model_type}_{MODEL_STAGE}"
+    
+    if cache_key in _model_cache:
+        return _model_cache[cache_key], _model_cache.get(f"{cache_key}_version", "cached")
+    
+    model = None
+    version = None
+    
+    # Get strategy for this model type
+    strategy = MODEL_STRATEGY_OVERRIDE.get(model_type, MODEL_LOAD_STRATEGY)
+    
+    # Success model: Always load from local (not registered in MLflow)
+    if strategy == "local" or model_type == "success":
+        model, version = _load_local_model(model_type)
+        if model is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Local model not found for {model_type}. Check models/artifacts/{model_type}/"
+            )
+    
+    # Trust model with auto strategy: Try MLflow first, fallback to local
+    elif strategy == "auto":
+        print(f"🔄 Loading {model_type} model (auto strategy)...")
+        model, version = _load_mlflow_model_with_timeout(model_type, timeout=10)
+        
+        if model is None:
+            print(f"⚠️ MLflow failed for {model_type}, trying local...")
+            model, version = _load_local_model(model_type)
+    
+    # Explicit local_first strategy
+    elif MODEL_LOAD_STRATEGY == "local_first":
+        model, version = _load_local_model(model_type)
+        
+        if model is None:
+            print("⚠️ No local model found, trying MLflow with 5s timeout...")
+            model, version = _load_mlflow_model_with_timeout(model_type, timeout=5)
+    
+    # Explicit mlflow_first strategy
+    elif MODEL_LOAD_STRATEGY == "mlflow_first":
+        model, version = _load_mlflow_model_with_timeout(model_type, timeout=10)
+        
+        if model is None:
+            print("⚠️ MLflow failed, falling back to local model...")
+            model, version = _load_local_model(model_type)
+    
+    # Cache result
+    if model is not None:
+        _model_cache[cache_key] = model
+        _model_cache[f"{cache_key}_version"] = version
+        _model_load_status[model_type] = {"status": "loaded", "version": version}
+        return model, version
+    
+    # No model available
+    _model_load_status[model_type] = {"status": "unavailable", "error": version}
+    raise HTTPException(
+        status_code=503,
+        detail=f"Model not available. Tried local paths and MLflow. Set MODEL_LOAD_STRATEGY=local_first and ensure model files exist."
+    )
+
+
+def get_model_status():
+    """Get current model loading status."""
+    return {
+        "strategy": MODEL_LOAD_STRATEGY,
+        "model_strategies": MODEL_STRATEGY_OVERRIDE,
+        "mlflow_uri": MLFLOW_TRACKING_URI,
+        "local_paths": {k: [str(p) for p in v] for k, v in LOCAL_MODEL_PATHS.items()},
+        "status": _model_load_status,
+        "cached_models": list(_model_cache.keys()),
+    }
 
 
 # ============================================================================
@@ -292,8 +420,8 @@ async def predict_trust_score(request: RawKOLFeatures):
     - 0-39: Likely Untrustworthy (high risk)
     """
     try:
-        # Load model
-        model, model_version = get_model()
+        # Load model (local-first strategy to avoid MLflow hanging)
+        model, model_version = get_model("trust")
         
         # Engineer features
         features = engineer_features(request)
@@ -429,26 +557,62 @@ async def predict_from_engineered_features(request: EngineeredFeatures):
 
 @router.get("/trust/model-info")
 async def get_model_info():
-    """Get information about the currently loaded model."""
+    """Get information about the currently loaded model and loading strategy."""
     try:
-        model, model_version = get_model()
+        # Get model status without triggering a load if not cached
+        status = get_model_status()
+        
+        # Check if model is already cached
+        if "trust_Production" in status.get("cached_models", []):
+            model, model_version = get_model("trust")
+            model_loaded = True
+        else:
+            model_loaded = False
+            model_version = "not_loaded_yet"
         
         return {
             "model_name": MODEL_NAME,
             "model_stage": MODEL_STAGE,
             "model_version": model_version,
+            "load_strategy": MODEL_LOAD_STRATEGY,
             "mlflow_uri": MLFLOW_TRACKING_URI,
+            "local_paths": LOCAL_MODEL_PATHS.get("trust", []),
             "features_count": len(FEATURE_COLUMNS),
             "feature_names": FEATURE_COLUMNS,
-            "status": "loaded"
+            "status": "loaded" if model_loaded else "ready",
+            "load_status": status.get("status", {}),
+            "hint": "Call POST /predict/trust to trigger model loading"
         }
     except Exception as e:
         return {
             "model_name": MODEL_NAME,
             "model_stage": MODEL_STAGE,
+            "load_strategy": MODEL_LOAD_STRATEGY,
             "status": "error",
             "error": str(e)
         }
+
+
+@router.get("/health")
+async def predict_health():
+    """Health check for predict service - shows model availability."""
+    trust_local = (PROJECT_ROOT / "models" / "artifacts" / "trust" / "lgbm_optuna_model.pkl").exists()
+    success_local = (PROJECT_ROOT / "models" / "artifacts" / "success" / "success_lgbm_model.pkl").exists()
+    
+    return {
+        "service": "predict",
+        "status": "ok",
+        "model_strategies": {
+            "trust": MODEL_STRATEGY_OVERRIDE.get("trust", "auto"),
+            "success": MODEL_STRATEGY_OVERRIDE.get("success", "local"),
+        },
+        "models_available": {
+            "trust": {"local": trust_local, "mlflow": "trust-score-lightgbm-optuna"},
+            "success": {"local": success_local, "mlflow": "not_registered"},
+        },
+        "mlflow_uri": MLFLOW_TRACKING_URI,
+        "note": "Trust: MLflow→local fallback | Success: local only"
+    }
 
 # ============================================================
 # SUCCESSSCORE ENDPOINTS (V2 - Binary Classification)
