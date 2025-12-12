@@ -1273,6 +1273,7 @@ Write-Host "`n🎉 Hot Path E2E Test Complete!" -ForegroundColor Green
 - **[MLflow Model Serving](docs/MLFLOW_MODEL_SERVING.md)** - Model registry setup and hybrid loading
 - **[Hot Path Guide](docs/Hot%20path/UNIFIED_HOT_PATH.md)** - Real-time streaming pipeline documentation
 - **[Quick Commands](docs/Hot%20path/QUICK_COMMANDS.md)** - Command cheat sheet for common operations
+- **[E2E Test Plan](docs/E2E_TEST_PLAN.md)** - Enterprise-grade End-to-End test plan and architectural audit
 
 ### External Links
 
