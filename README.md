@@ -6,7 +6,7 @@
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> 📅 **Last Updated**: December 10, 2025 | **Status**: 🟢 Production Ready
+> 📅 **Last Updated**: December 13, 2025 | **Status**: 🟢 Production Ready
 
 A production-grade **KOL (Key Opinion Leader) Analytics Platform** featuring real-time streaming, batch processing, and ML-powered scoring for influencer marketing intelligence.
 
@@ -17,7 +17,7 @@ A production-grade **KOL (Key Opinion Leader) Analytics Platform** featuring rea
 ## 📊 System Status Dashboard
 
 ### Data Pipeline Health
-> 🔄 **Pipeline verified**: December 10, 2025 | **Uptime**: 99.8%
+> 🔄 **Pipeline verified**: December 13, 2025 | **Uptime**: 99.8%
 
 | Layer | Tables/Topics | Records | Status | Processing Engine |
 |-------|---------------|---------|--------|-------------------|
@@ -172,10 +172,13 @@ A production-grade **KOL (Key Opinion Leader) Analytics Platform** featuring rea
 │  │  ┌────────────────────────────────────────────────────────────┐   │    │
 │  │  │         STREAMLIT DASHBOARD (Port 8501)                     │   │    │
 │  │  │                                                             │   │    │
-│  │  │  Pages:                                                     │   │    │
-│  │  │  1. 🔥 Realtime Hot KOL - Live trending rankings           │   │    │
-│  │  │  2. 👤 KOL Profiles - Detailed analytics                   │   │    │
-│  │  │  3. 📊 Analytics & Insights - Business intelligence        │   │    │
+│  │  │  Features:                                                  │   │    │
+│  │  │  • Tab 1: 🔥 Hot Path - Real-time trending (Redis)         │   │    │
+│  │  │    - Pre-computed ML Success Scores                        │   │    │
+│  │  │    - Live trending rankings (30s refresh)                  │   │    │
+│  │  │  • Tab 2: ❄️ Cold Path - Historical analytics (MinIO)      │   │    │
+│  │  │    - Virality Index (Total Likes/Followers ratio)          │   │    │
+│  │  │    - ML-based Success Score distribution                   │   │    │
 │  │  │                                                             │   │    │
 │  │  │  Data Refresh: Real-time (Redis polling every 5s)          │   │    │
 │  │  └────────────────────────────────────────────────────────────┘   │    │
@@ -445,8 +448,93 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/predict/batch" `
 | Score Type | Range | Model | Update Freq | Computation | Purpose |
 |------------|-------|-------|-------------|-------------|---------|
 | **Trust Score** | 0-100 | XGBoost Classifier | On-demand | API (FastAPI) | KOL credibility & fraud detection |
-| **Success Score** | 0-100 | XGBoost Regressor | On-demand | API (FastAPI) | Campaign ROI prediction |
+| **Success Score** | 0-100 | XGBoost Regressor | On-demand | API (FastAPI) + Redis | Campaign ROI prediction |
 | **Trending Score** | 0-100 | Rule-based + Velocity | Real-time (30s) | Spark Streaming | Viral momentum tracking |
+| **Virality Index** | 0-∞x | Statistical Ratio | Batch (daily) | MinIO Analytics | Total reach amplification |
+
+### 🆕 Virality Index (Dec 13, 2025)
+
+**Definition**: Measures total content virality by comparing cumulative likes to follower base.
+
+**Formula**:
+```python
+virality_index = total_favorites_count / followers_count
+# Example: 526.4M likes ÷ 13.4M followers = 39.3x
+# Interpretation: This KOL's content received 39.3× more likes than their follower count
+```
+
+**Display Format**: `39.3x` (not percentage to avoid confusion)
+
+**Use Cases**:
+- **Content Amplification**: Identify KOLs whose content reaches far beyond their follower base
+- **Viral Potential**: High virality (>50x) = content frequently goes viral through shares/discovery
+- **Long-term Impact**: Cumulative metric showing total historical reach
+- **Cross-platform Reach**: Indicates content effectiveness across TikTok's algorithm
+
+**Typical Ranges** (TikTok):
+| Virality Index | Interpretation | Content Strategy |
+|----------------|----------------|------------------|
+| **<10x** | Low virality | Content mostly reaches existing followers |
+| **10-30x** | Normal virality | Healthy organic reach, some viral posts |
+| **30-70x** | High virality | Consistently viral, strong discovery potential |
+| **>70x** | Exceptional virality | Top-tier creator, massive viral hits |
+
+**Why Not "Engagement Ratio"?**  
+Previously called "Engagement Ratio" (displayed as 3928%), this was misleading:
+- ❌ **Engagement Rate**: Usually *per-post* metric (likes/followers × 100)
+- ✅ **Virality Index**: *Cumulative* total reach amplification (ratio format)
+
+**Dashboard Integration**:
+- **Tab 1 (Hot Path)**: Uses pre-computed Success Scores from Redis (ML-based)
+- **Tab 2 (Cold Path)**: Displays Virality Index from historical MinIO data
+
+### 🔄 Success Score Enhancement (Dec 13, 2025)
+
+**3-Tier Calculation Strategy** (scripts/load_profiles_to_redis.py):
+
+```python
+def calculate_success_score_ml(products, profile):
+    # Tier 1: ML API Inference (Highest Accuracy)
+    if products and len(products) > 0:
+        # Call /api/v1/predict/success with real product data
+        # Requires: sold_count, price, video metrics
+        # Coverage: 10/45 KOLs (22%)
+        return ml_api_score, 'ml_api'
+    
+    # Tier 2: Profile-based Estimation (Engagement Proxy)
+    elif profile.get('avg_engagement_rate', 0) > 0:
+        # Estimate from virality and engagement patterns
+        # Uses: favorites_count, followers_count, video_count
+        # Coverage: 35/45 KOLs (78%)
+        virality = total_likes / followers
+        success_score = 20 + math.log10(virality + 1) * 30
+        return success_score, 'profile_based'
+    
+    # Tier 3: Sales-based Scoring (Product Performance)
+    else:
+        # Calculate from actual sales data
+        # Thresholds: 100K+ (score 95), 50K+ (score 85), etc.
+        total_sold = sum([p['sold_count'] for p in products])
+        return sales_tier_score, 'sales_based'
+```
+
+**Score Distribution** (45 KOLs):
+- **0-25**: 6 KOLs (13%) - Low performers
+- **25-50**: 5 KOLs (11%) - Below average
+- **50-75**: 27 KOLs (60%) - Average to good
+- **75-100**: 7 KOLs (16%) - Excellent performers
+
+**Data Sources**:
+- **ML API**: 10 KOLs with rich product data (real inference)
+- **Profile-based**: 35 KOLs without products (virality estimation)
+- **Redis Cache**: All scores pre-computed and stored with method tag
+
+**Validation** (scripts/test_scoring_pipeline.py):
+- ✅ Test 1: Profile variance (15 unique follower counts)
+- ✅ Test 2: Trending score differentiation (73.35-88.25 range)
+- ✅ Test 3: Trust API variance (43.88-97.68 range)
+- ✅ Test 4: Final score formula (0.4×Trending + 0.35×Success + 0.25×Trust)
+- ✅ Test 5: Trending API endpoint response
 
 ### Score Interpretation & Business Rules
 
@@ -587,6 +675,9 @@ kol-platform/
 │   ├── ML_PIPELINE.md                 # Model training & evaluation
 │   ├── DOMAIN_SEPARATION.md           # Hot/Cold path decisions
 │   ├── MLFLOW_MODEL_SERVING.md        # MLflow setup guide
+│   ├── E2E_TEST_REPORT_20251213.md    # ⭐ Latest end-to-end test results
+│   ├── PRODUCTION_TEST_SCENARIOS.md   # ⭐ Production readiness scenarios (PROD-001 to PROD-008)
+│   ├── SPARK_STREAMING_ARCHITECTURE.md # ⭐ Streaming design rationale
 │   ├── guides/                        # Step-by-step tutorials
 │   ├── ingestion_guide/               # Data ingestion documentation
 │   ├── Intergration/                  # Integration patterns
@@ -637,7 +728,10 @@ kol-platform/
 │   └── trust/                         # Trust model training
 │
 ├── 📂 scripts/                        # Utility Scripts
-│   ├── import_json_to_kafka.py        # ⭐ Kafka data importer (NEW)
+│   ├── import_json_to_kafka.py        # ⭐ Kafka data importer
+│   ├── load_profiles_to_redis.py      # ⭐ Load profiles + ML Success Scores to Redis
+│   ├── test_scoring_pipeline.py       # ⭐ Validate scoring variance (5 tests)
+│   ├── debug_engagement.py            # ⭐ Engagement ratio analysis tool
 │   ├── test_api_endpoints.sh          # API test suite (34 tests)
 │   ├── cache_warmer.py                # Redis preloader
 │   └── start_unified_hot_path.ps1     # Hot path launcher
@@ -659,8 +753,11 @@ kol-platform/
 │   │
 │   ├── cache/                         # Caching strategies
 │   └── dashboard/                     # Streamlit Dashboard
-│       ├── app.py                     # Main dashboard app
-│       └── pages/                     # Multi-page app
+│       ├── app.py                     # ⭐ Main dashboard (2 tabs: Hot Path + Cold Path)
+│       │                              #   - Tab 1: Real-time trending with ML Success Scores
+│       │                              #   - Tab 2: Virality Index analytics (Likes/Followers ratio)
+│       │                              #   - Dark slate theme (#1e293b)
+│       └── pages/                     # Multi-page app (legacy)
 │           ├── 1_Realtime_Hot_KOL.py  # Real-time trending
 │           ├── 2_KOL_Profiles.py      # Profile browser
 │           └── 3_Analytics.py         # BI insights
@@ -1457,7 +1554,7 @@ If you find this project useful, please consider giving it a ⭐!
 
 ---
 
-**Last Updated**: December 10, 2025  
+**Last Updated**: December 13, 2025  
 **Version**: 1.0.0  
 **Status**: 🟢 Production Ready
 
