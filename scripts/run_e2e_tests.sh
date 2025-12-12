@@ -200,7 +200,7 @@ run_phase_2() {
         "docker exec $REDIS_CONTAINER redis-cli EXISTS 'ranking:tiktok:trending' 2>/dev/null | grep -q '1'"
     
     run_test "HOT-006" "Trending scores in valid range (0-100)" \
-        "docker exec $REDIS_CONTAINER redis-cli ZREVRANGE 'ranking:tiktok:trending' 0 0 WITHSCORES 2>/dev/null | tail -1 | awk '{if(\$1>=0 && \$1<=100) exit 0; else exit 1}'"
+        "docker exec $REDIS_CONTAINER redis-cli ZREVRANGE 'ranking:tiktok:trending' 0 0 WITHSCORES 2>/dev/null | tail -1 | awk '{if(\$1>=0 && \$1<=100) exit 0; else exit 1}'" 10
     
     # Check Spark container
     if check_container "$SPARK_CONTAINER"; then
@@ -259,10 +259,10 @@ run_phase_3() {
     run_test "ML-006" "Success model info endpoint" \
         "curl -sf '$API_BASE_URL/predict/success/model-info' | grep -q 'model_type'"
     
-    # Response time test
+    # Response time test - capture time and check if < 100ms (0.1s)
     run_test "ML-007" "API response time < 100ms" \
         "response_time=\$(curl -o /dev/null -s -w '%{time_total}' '$API_BASE_URL/healthz'); \
-         awk 'BEGIN{if('$response_time' < 0.1) exit 0; else exit 1}'"
+         awk -v rt=\"\$response_time\" 'BEGIN{if(rt < 0.1) exit 0; else exit 1}'"
     
     run_test "ML-008" "Trending API endpoint" \
         "curl -sf '$API_BASE_URL/api/v1/trending' | grep -q 'data'"
@@ -272,7 +272,7 @@ run_phase_3() {
             -H 'Content-Type: application/json' \
             -d '{\"kol_id\":\"range_test\",\"followers_count\":50000,\"following_count\":200,\"post_count\":100,\"favorites_count\":25000,\"account_age_days\":365,\"verified\":true,\"has_bio\":true,\"has_url\":true,\"has_profile_image\":true,\"bio_length\":100}' \
             | grep -o '\"trust_score\":[0-9.]*' | cut -d: -f2); \
-         awk 'BEGIN{if('$score' >= 0 && '$score' <= 100) exit 0; else exit 1}'"
+         awk -v s=\"\$score\" 'BEGIN{if(s >= 0 && s <= 100) exit 0; else exit 1}'"
 }
 
 # ============================================
@@ -349,8 +349,9 @@ main() {
     echo -e "  Failed:  ${RED}$FAILED${NC}"
     echo -e "  Skipped: ${YELLOW}$SKIPPED${NC}"
     if [ $TOTAL -gt 0 ]; then
-        PASS_RATE=$(echo "scale=1; $PASSED * 100 / $TOTAL" | bc)
-        echo "  Rate:    $PASS_RATE%"
+        # Use shell arithmetic (bc may not be available)
+        PASS_RATE=$((PASSED * 100 / TOTAL))
+        echo "  Rate:    ${PASS_RATE}%"
     fi
     echo "========================================"
     
