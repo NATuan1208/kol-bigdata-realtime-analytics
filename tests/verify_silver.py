@@ -1,12 +1,18 @@
 """
 Verify Medallion Architecture Status (Bronze → Silver → Gold)
 """
+import os
 from minio import Minio
 
+# SECURITY: Use environment variables for credentials
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin123")
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+
 client = Minio(
-    endpoint='localhost:9000', 
-    access_key='minioadmin', 
-    secret_key='minioadmin123', 
+    endpoint=MINIO_ENDPOINT, 
+    access_key=MINIO_ACCESS_KEY, 
+    secret_key=MINIO_SECRET_KEY, 
     secure=False
 )
 

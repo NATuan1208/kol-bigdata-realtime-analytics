@@ -463,8 +463,30 @@ async def predict_trust_score(request: RawKOLFeatures):
             timestamp=datetime.now().isoformat()
         )
         
+    except HTTPException:
+        raise  # Re-raise HTTPExceptions as-is
+    except ValueError as e:
+        # Handle validation/feature engineering errors
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_error",
+                "message": str(e),
+                "kol_id": request.kol_id
+            }
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the error for debugging (in production, use structured logging)
+        import logging
+        logging.error(f"Trust prediction error for {request.kol_id}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "prediction_error",
+                "message": "An error occurred during prediction. Please try again.",
+                "error_type": type(e).__name__
+            }
+        )
 
 
 @router.post("/trust/batch", response_model=BatchPredictionResponse)

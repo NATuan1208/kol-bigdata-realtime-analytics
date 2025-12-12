@@ -30,6 +30,7 @@ Usage:
 
 from datetime import datetime
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,17 +87,24 @@ Currently no authentication required (development mode).
 )
 
 # CORS middleware for frontend access
+# SECURITY: In production, remove wildcard and specify exact origins
+ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if os.getenv("CORS_ALLOWED_ORIGINS") else [
+    "http://localhost:3000",       # Next.js dev
+    "http://localhost:8501",       # Streamlit
+    "http://localhost:8080",       # Other frontends
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8501",
+]
+
+# SECURITY WARNING: Remove "*" in production - it allows any origin
+if os.getenv("ENVIRONMENT", "development") == "development":
+    ALLOWED_ORIGINS.append("*")  # Only for development
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",       # Next.js dev
-        "http://localhost:8501",       # Streamlit
-        "http://localhost:8080",       # Other frontends
-        "http://127.0.0.1:3000",
-        "*"                            # Allow all for development
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # Restrict to needed methods
     allow_headers=["*"],
 )
 

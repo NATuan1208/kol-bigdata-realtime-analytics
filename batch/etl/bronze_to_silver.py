@@ -53,10 +53,24 @@ from pyspark.sql.types import (
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
+# SECURITY: Credentials MUST be provided via environment variables
+# DO NOT hardcode credentials in production
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "sme-minio:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin123")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 BUCKET = os.getenv("BUCKET", "kol-platform")
+
+# Validate required credentials
+if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
+    import warnings
+    warnings.warn(
+        "SECURITY WARNING: MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set via environment variables. "
+        "Using default development credentials is NOT recommended for production.",
+        UserWarning
+    )
+    # Fallback for development only - remove in production
+    MINIO_ACCESS_KEY = MINIO_ACCESS_KEY or "minioadmin"
+    MINIO_SECRET_KEY = MINIO_SECRET_KEY or "minioadmin123"
 
 BRONZE_PATH = f"s3a://{BUCKET}/bronze/raw"
 SILVER_PATH = f"s3a://{BUCKET}/silver"
