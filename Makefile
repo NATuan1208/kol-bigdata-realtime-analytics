@@ -39,7 +39,7 @@ SHARED_NETWORK := sme-network
 help: ## Show this help message
 	@echo "KOL Big Data Analytics Platform — Available Commands"
 	@echo "===================================================="
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 # ============================================================================
 # NETWORK SETUP
@@ -248,8 +248,17 @@ test-unit: ## Run unit tests only
 	@pytest tests/unit/ -v
 
 .PHONY: test-e2e
-test-e2e: ## Run end-to-end tests
-	@pytest tests/e2e/ -v
+test-e2e: ## Run end-to-end tests (comprehensive infrastructure test)
+	@echo "Running E2E tests..."
+	@bash scripts/run_e2e_tests.sh
+
+.PHONY: test-e2e-verbose
+test-e2e-verbose: ## Run E2E tests with verbose output
+	@bash scripts/run_e2e_tests.sh --verbose
+
+.PHONY: test-e2e-phase
+test-e2e-phase: ## Run specific E2E phase (use PHASE=1|2|3|4)
+	@bash scripts/run_e2e_tests.sh --phase $(PHASE)
 
 .PHONY: test-api
 test-api: ## Test API endpoints
