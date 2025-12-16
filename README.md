@@ -210,6 +210,66 @@ A production-grade **KOL (Key Opinion Leader) Analytics Platform** featuring rea
 - **8GB+ RAM** (16GB recommended for production workloads)
 - **Git** for version control
 - **PowerShell 5.1+** (Windows) or Bash (Linux/Mac)
+- **Python 3.11+** for local development
+
+### 🎯 Quick Start: ML Model Evaluation (No Infrastructure Required)
+
+If you just want to **evaluate the trained ML models** without starting the full infrastructure:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/NATuan1208/kol-bigdata-realtime-analytics.git
+cd kol-bigdata-realtime-analytics
+
+# 2. Install Python dependencies
+pip install -r requirements.txt
+
+# 3. Run model evaluation (loads pre-trained models from artifacts/)
+python -m models.evaluation.evaluate_trained_models
+
+# Expected output:
+# ✅ Trust Model - Accuracy: 88.10%, ROC-AUC: 0.9400
+# ✅ Success Model - Accuracy: 49.28%
+# 💾 Charts saved to models/reports/charts/
+
+# 4. View evaluation charts
+explorer models\reports\charts  # Windows
+# open models/reports/charts    # macOS
+# xdg-open models/reports/charts  # Linux
+
+# Available visualizations:
+# - trust_confusion_matrix.png
+# - trust_roc_curve.png
+# - trust_precision_recall_curve.png
+# - success_confusion_matrix.png
+# - success_roc_curve.png
+```
+
+**Advanced Model Comparison** (XGBoost vs LightGBM vs IsolationForest vs Ensemble):
+```bash
+# Compare 4 Trust models with confusion matrices, ROC curves, ablation study
+python -m models.evaluation.model_comparison_analysis
+
+# Generates 6 comprehensive charts:
+# - trust_comparison_barplot.png (performance comparison)
+# - trust_confusion_matrices.png (4 models side-by-side)
+# - trust_roc_curves.png (ROC comparison)
+# - trust_pr_curves.png (Precision-Recall curves)
+# - trust_ablation_study.png (feature importance)
+# - trust_diversity_paradox.png (explains why LightGBM > Ensemble)
+```
+
+**Train New Models** (if you want to retrain from scratch):
+```bash
+# Train Trust Score model (LightGBM with Optuna - 50 trials, ~10 minutes)
+python -m models.evaluation.train_trust_model
+
+# Train Success Score model (LightGBM 3-class)
+python -m models.evaluation.train_success_model
+
+# Or run full pipeline (train + evaluate)
+python -m models.evaluation.run_pipeline
+```
 
 ### 1️⃣ Clone Repository & Start Infrastructure
 
@@ -343,6 +403,109 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/predict/trust" `
 | **MLflow UI** | http://localhost:5000 | N/A | Model registry & experiments |
 | **MinIO Console** | http://localhost:9001 | minioadmin/minioadmin | Data lake browser |
 | **Redpanda Console** | http://localhost:8082 | N/A | Kafka topics & consumer groups |
+
+---
+
+## 🎬 Production Demo Guide
+
+### Hot Path Demo (Real-time Streaming)
+
+**Objective:** Demonstrate end-to-end real-time streaming from TikTok → Kafka → Spark → Redis → Dashboard
+
+**Duration:** 20-25 minutes | **Complexity:** Medium | **Safety:** High (resource-limited)
+
+#### Quick Demo Script
+
+```powershell
+# Step 1: Prepare infrastructure (5 min)
+docker-compose -f dwh/infra/docker-compose.kol.yml up -d
+python scripts/load_profiles_to_redis.py  # Load baseline data
+
+# Step 2: Start Spark Streaming (2 min)
+docker exec -it kol-spark-streaming bash
+spark-submit --master spark://spark-master:7077 \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \
+  /opt/spark-jobs/trending_stream.py
+
+# Step 3: Run optimized scraper (10-12 min)
+.\scripts\demo_hot_path.ps1 -MaxKols 5 -MaxVideos 10
+
+# Expected Output:
+# 🔎 Discovery: Found 5 KOLs
+# 📊 Video Stats: Scraped 50 videos
+# ⚡ Spark: Processing 5-10 events/sec
+# ✅ Redis: 5 new trending scores
+
+# Step 4: Verify in Dashboard (3 min)
+# Open http://localhost:8501
+# Tab 1 → Click "🔄 Refresh Trending"
+# See new KOLs with real-time trending scores
+```
+
+#### Demo Architecture Focus
+
+```
+TikTok → Discovery Scraper → kol.discovery.raw (Kafka)
+                                       ↓
+                              Video Stats Worker
+                                       ↓
+                        kol.videos.raw + kol.profiles.raw
+                                       ↓
+                              Spark Streaming
+                              (30s micro-batch)
+                                       ↓
+                         Redis: streaming_scores:*
+                                       ↓
+                              Dashboard Auto-refresh
+```
+
+#### Why This Demo?
+
+- ✅ **No Comments/Products Workers**: Focus ONLY on trending score (video metrics)
+- ✅ **Limited Volume**: 5 KOLs × 10 videos = 50 records (safe for demo)
+- ✅ **Resource Safe**: MaxKols=5 prevents Spark/Chrome crashes
+- ✅ **Highlights Hot Path**: Shows real-time streaming vs batch processing
+
+#### Documentation
+
+**Comprehensive Guide:** [docs/HOT_PATH_DEMO_GUIDE.md](docs/HOT_PATH_DEMO_GUIDE.md) (400+ lines)
+- Pre-flight checks (infrastructure health)
+- 5-phase execution timeline
+- Risk mitigation strategies
+- Troubleshooting guide
+
+**Quick Checklist:** [docs/DEMO_CHECKLIST.md](docs/DEMO_CHECKLIST.md)
+- 1 week before: Dry run testing
+- 1 day before: Data cleanup
+- 1 hour before: Infrastructure restart
+- During demo: Phase-by-phase validation
+- Post-demo: Cleanup & metrics collection
+
+#### Key Metrics to Show
+
+| Metric | Expected Value | Validation Command |
+|--------|---------------|-------------------|
+| **Scraping Speed** | 2-3 min/KOL | Monitor terminal logs |
+| **Kafka Throughput** | 5-10 msg/sec | Redpanda Console (port 8080) |
+| **Spark Processing** | <500ms/batch | Spark UI (port 4040) |
+| **Dashboard Refresh** | <2s | Browser DevTools Network |
+| **Score Variance** | 70-90 range | Redis: `ZREVRANGE ranking:tiktok:trending 0 9` |
+
+#### Safety Features
+
+**Optimized Script:** `scripts/demo_hot_path.ps1`
+- Runs ONLY 2 workers: Discovery + Video Stats
+- Excludes Comments/Products (not needed for trending)
+- Resource limits: MaxKols=5, MaxVideos=10
+- Auto-resets Kafka consumer groups to LATEST
+- Chrome profile isolation per worker
+
+**Fallback Plan:**
+```powershell
+# If TikTok blocks scraping during demo:
+.\scripts\demo_hot_path.ps1 -DryRun
+# Uses sample data from data/tiktok_crawl/
+```
 
 ---
 

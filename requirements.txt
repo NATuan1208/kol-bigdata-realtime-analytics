@@ -1,0 +1,119 @@
+# ============================================================================
+# KOL Analytics Platform - Python Dependencies
+# ============================================================================
+# Quick install: pip install -r requirements.txt
+# ============================================================================
+
+# ============================================================================
+# CORE DATA PROCESSING
+# ============================================================================
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.11.0
+pyarrow>=14.0.0              # Parquet/Iceberg support
+joblib>=1.3.0                # Model serialization
+
+# ============================================================================
+# MACHINE LEARNING - CORE
+# ============================================================================
+scikit-learn>=1.3.0          # Classification, regression, clustering
+
+# ============================================================================
+# MACHINE LEARNING - GRADIENT BOOSTING
+# ============================================================================
+xgboost>=2.0.0               # Extreme Gradient Boosting
+lightgbm>=4.1.0              # Light Gradient Boosting Machine
+optuna>=4.0.0                # Hyperparameter optimization
+
+# ============================================================================
+# MACHINE LEARNING - DEEP LEARNING (Optional, for NLP models)
+# ============================================================================
+# torch>=2.1.0               # PyTorch (2.5GB) - Uncomment if using PhoBERT
+# transformers>=4.35.0       # Hugging Face (500MB) - Uncomment for NLP
+# sentencepiece>=0.1.99      # Tokenizer - Uncomment for PhoBERT
+
+# ============================================================================
+# MACHINE LEARNING - ANOMALY DETECTION
+# ============================================================================
+pyod>=1.1.0                  # Outlier detection algorithms
+
+# ============================================================================
+# MACHINE LEARNING - TIME SERIES
+# ============================================================================
+prophet>=1.1.5               # Facebook Prophet for forecasting
+statsmodels>=0.14.0          # Statistical models (ARIMA, etc.)
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+matplotlib>=3.7.0            # Plotting library
+seaborn>=0.12.0              # Statistical visualization
+
+# ============================================================================
+# BIG DATA PROCESSING
+# ============================================================================
+pyspark==3.5.3               # Distributed data processing
+
+# ============================================================================
+# MLOPS & MODEL MANAGEMENT
+# ============================================================================
+mlflow>=2.9.0                # Model tracking & registry
+onnx>=1.15.0                 # Model export
+onnxruntime>=1.16.0          # Fast inference
+
+# ============================================================================
+# DATA STORAGE & CONNECTORS
+# ============================================================================
+boto3>=1.29.0                # MinIO/S3 client
+minio>=7.1.0                 # MinIO Python SDK
+psycopg2-binary>=2.9.9       # PostgreSQL connector
+trino>=0.327.0               # Distributed query engine
+redis>=5.0.0                 # Redis cache client
+
+# ============================================================================
+# STREAMING & MESSAGING
+# ============================================================================
+kafka-python>=2.0.2          # Apache Kafka client
+
+# ============================================================================
+# API & WEB FRAMEWORK
+# ============================================================================
+fastapi>=0.104.0             # Modern web framework
+uvicorn>=0.24.0              # ASGI server
+pydantic>=2.5.0              # Data validation
+pydantic-settings>=2.1.0     # Settings management
+
+# ============================================================================
+# WEB SCRAPING & DATA COLLECTION
+# ============================================================================
+requests>=2.31.0             # HTTP client
+beautifulsoup4>=4.12.0       # HTML parsing
+selenium>=4.15.0             # Browser automation
+httpx>=0.25.0                # Async HTTP client
+
+# Social Media APIs
+tweepy>=4.14.0               # Twitter/X API
+# facebook-sdk>=3.1.0        # Facebook API (optional)
+# instaloader>=4.10.0        # Instagram (optional)
+
+# ============================================================================
+# UTILITIES & CONFIGURATION
+# ============================================================================
+python-dotenv>=1.0.0         # Environment variable management
+pyyaml>=6.0.1                # YAML parser
+click>=8.1.0                 # CLI creation
+tqdm>=4.66.0                 # Progress bars
+loguru>=0.7.0                # Modern logging
+
+# ============================================================================
+# MONITORING & OBSERVABILITY
+# ============================================================================
+prometheus-client>=0.19.0    # Metrics export
+
+# ============================================================================
+# TESTING & QUALITY (Development)
+# ============================================================================
+pytest>=7.4.0                # Testing framework
+pytest-cov>=4.1.0            # Coverage plugin
+black>=23.12.0               # Code formatter
+ruff>=0.1.0                  # Linter
